@@ -1,0 +1,46 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volVectorField;
+    object      U;
+}
+
+dimensions      [0 1 -1 0 0 0 0];
+
+internalField   uniform (0 0 0);
+
+boundaryField
+{
+    {{ wall_patch }}
+    {
+        type            noSlip;
+    }
+
+    {{ inlet_patch }}
+    {
+        type            flowRateInletVelocity;
+        volumetricFlowRate
+        {
+            type                table;
+            values
+            (
+{% for t, Q in waveform_table %}
+                ( {{ "%.6f"|format(t) }}  {{ "%.6e"|format(Q) }} )
+{% endfor %}
+            );
+            outOfBounds         repeat;
+            interpolationScheme linear;
+        }
+        value           uniform (0 0 0);
+    }
+
+{% for outlet in outlet_patches %}
+    {{ outlet }}
+    {
+        type            inletOutlet;
+        inletValue      uniform (0 0 0);
+        value           uniform (0 0 0);
+    }
+{% endfor %}
+}

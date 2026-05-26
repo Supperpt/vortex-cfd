@@ -1,0 +1,5 @@
+jinja2>=3.1
+numpy>=1.24
+pyvista>=0.43
+click>=8.1
+pytest>=8.0

@@ -1,0 +1,22 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      surfaceFeatureExtractDict;
+}
+
+{% for stl_name in all_stls %}
+{{ stl_name }}.stl
+{
+    extractionMethod    extractFromSurface;
+
+    extractFromSurfaceCoeffs
+    {
+        includedAngle   150;  // extract edges sharper than 30 degrees
+    }
+
+    writeFeatureEdgeMesh    yes;
+}
+
+{% endfor %}

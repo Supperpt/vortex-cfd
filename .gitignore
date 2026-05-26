@@ -1,0 +1,35 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# ── Pytest / coverage ─────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── OpenFOAM generated case directories ───────────────────────────────────────
+# Pattern matches case_YYYYMMDD_HHMMSS directories produced by vortex-cfd
+case_*/
+
+# Temp STL directories written by scaling.py (in system temp, but just in case)
+vortex_cfd_stls_*/
+
+# Log files written inside a case or the working directory
+vortex_cfd.log
+*.log
+
+# ── OS / editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

@@ -1,0 +1,37 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+application     pimpleFoam;
+
+startFrom       startTime;
+startTime       0;
+
+stopAt          endTime;
+endTime         {{ "%.4f"|format(end_time) }};   // {{ (end_time / t_cycle)|round(1) }} cardiac cycles
+
+deltaT          1e-5;
+
+// Adaptive time-stepping driven by maxCo.  Mandatory because peak-systolic
+// velocity is ~10x the diastolic baseline; a fixed dt either wastes effort
+// during diastole or diverges during systole.
+adjustTimeStep  yes;
+maxCo           {{ max_co }};
+maxDeltaT       5e-4;
+
+writeControl    adjustableRunTime;
+writeInterval   {{ "%.4f"|format(write_interval) }};   // 50 snapshots / cycle
+purgeWrite      0;
+
+writeFormat     binary;
+writePrecision  8;
+writeCompression off;
+
+timeFormat      general;
+timePrecision   8;
+
+runTimeModifiable yes;

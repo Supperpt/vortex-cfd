@@ -1,0 +1,11 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      turbulenceProperties;
+}
+
+// Laminar — Re in the ICA parent artery is typically 200-400, well below
+// the transition threshold.  k-omega SST can be opted in via Phase B flag.
+simulationType  laminar;

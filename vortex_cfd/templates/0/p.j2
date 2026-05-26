@@ -1,0 +1,33 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      p;
+}
+
+// Kinematic pressure p/rho  [m^2/s^2]
+dimensions      [0 2 -2 0 0 0 0];
+
+internalField   uniform 0;
+
+boundaryField
+{
+    {{ wall_patch }}
+    {
+        type            zeroGradient;
+    }
+
+    {{ inlet_patch }}
+    {
+        type            zeroGradient;
+    }
+
+{% for outlet in outlet_patches %}
+    {{ outlet }}
+    {
+        type            fixedValue;
+        value           uniform 0;
+    }
+{% endfor %}
+}

@@ -1,0 +1,14 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      transportProperties;
+}
+
+// Newtonian whole-blood model.
+// rho = {{ "%.0f"|format(rho) }} kg/m^3, mu = {{ "%.4e"|format(nu * rho) }} Pa.s
+// nu  = mu/rho = {{ "%.3e"|format(nu) }} m^2/s  (Cho & Kensey 1991 infinite-shear value)
+transportModel  Newtonian;
+
+nu              [0 2 -1 0 0 0 0]  {{ "%.3e"|format(nu) }};

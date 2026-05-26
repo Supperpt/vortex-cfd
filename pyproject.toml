@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "vortex-cfd"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "jinja2>=3.1",
+    "numpy>=1.24",
+    "pyvista>=0.43",
+    "click>=8.1",
+]
+
+[project.scripts]
+vortex-cfd = "vortex_cfd.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts  = "-v --tb=short"

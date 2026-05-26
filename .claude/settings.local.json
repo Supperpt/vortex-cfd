@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(python -m pytest --tb=no -q)",
+      "Bash(wsl --list --verbose)",
+      "Bash(wsl --status)",
+      "Bash(gh auth *)"
+    ]
+  }
+}
