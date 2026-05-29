@@ -16,9 +16,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-STL_DIR="${STL_DIR:?Set STL_DIR to a directory of VORTEX STL files}"
-OUT_DIR="${TMPDIR:-/tmp}/vortex_cfd_smoke_$$"
+export REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+export STL_DIR="${STL_DIR:?Set STL_DIR to a directory of VORTEX STL files}"
+export OUT_DIR="${TMPDIR:-/tmp}/vortex_cfd_smoke_$$"
 
 mkdir -p "$OUT_DIR"
 trap 'rm -rf "$OUT_DIR"' EXIT

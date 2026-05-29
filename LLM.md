@@ -239,9 +239,40 @@ The PIMPLE algorithm with 2 outer correctors gives a good balance between stabil
 
 ---
 
+## ⚡ NEXT ACTION (start here)
+
+**Run the full OpenFOAM pipeline against the real patient STL (Phase A validation).**
+
+Everything is confirmed ready:
+- OpenFOAM v2512 found at `/usr/lib/openfoam/openfoam2512/etc/bashrc` (picked up automatically by `run-cfd.sh`)
+- STL files confirmed at `/home/diogovluz/Documentos/Programas/Programa VMTK/`
+  - `output_wall.stl` → wall (31346 cells, area 598 mm²)
+  - `input_cap_2.stl` → inlet (48 cells, area 6.5 mm²)
+  - `output_cap_3.stl` → outlet (48 cells, area 1.8 mm²)
+  - `output_cap_4.stl` → outlet (48 cells, area 3.2 mm²)
+- Geometry is mm-scale (max extent ~36 mm) — auto-scaling ×0.001 will trigger correctly
+- `vortex-aneurysm` conda env has all Python deps installed
+
+**Command to run (single line, paste into terminal, interactive labelling):**
+
+```bash
+bash /home/diogovluz/Documentos/Programas/vortex-cfd/run-cfd.sh --stl-dir '/home/diogovluz/Documentos/Programas/Programa VMTK' --cycles 1 --mean-velocity 0.4 --cores 4 --out-dir /tmp/vortex_test
+```
+
+Use `--cycles 1` for the first test run (faster). When the interactive labeller prompts, assign:
+- `output_wall.stl` → `wall`
+- `input_cap_2.stl` → `inlet`
+- `output_cap_3.stl` → `outlet`
+- `output_cap_4.stl` → `outlet`
+
+**Success criterion:** `case_XXXXXXXX_XXXXXX.foam` appears in `/tmp/vortex_test/` and opens in ParaView showing velocity fields. If anything fails, record it as a bug in Section 5 and fix before starting Phase B.
+
+---
+
 ## 8. Session history
 
 | Date | Session summary |
 |---|---|
 | 2026-05-26 | Phase A implementation: all Python modules + 13 OpenFOAM templates + Allrun script. Syntax-validated. Not yet run against real STLs on Linux. |
 | 2026-05-26 | pytest suite: 99 tests across 4 files (waveform, scaling, case_builder, env_check). All pass on Windows with synthetic pyvista geometry. Added pyproject.toml. |
+| 2026-05-29 | Phase A validation (partial): pytest confirmed 99/99 pass on Linux in vortex-aneurysm env. Fixed smoke_test.sh (OUT_DIR/STL_DIR/REPO_ROOT not exported — Python subprocess couldn't read them via os.environ). Smoke test PASSED with real VMTK STLs. OpenFOAM v2512 confirmed at standard path. Full mesher+solver run not yet executed — see NEXT ACTION above. |

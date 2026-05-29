@@ -5,7 +5,11 @@
       "Bash(python -m pytest --tb=no -q)",
       "Bash(wsl --list --verbose)",
       "Bash(wsl --status)",
-      "Bash(gh auth *)"
+      "Bash(gh auth *)",
+      "Bash(python *)",
+      "Bash(conda activate *)",
+      "Bash(conda run *)",
+      "Bash(STL_DIR='/home/diogovluz/Documentos/Programas/Programa VMTK' conda run *)"
     ]
   }
 }
