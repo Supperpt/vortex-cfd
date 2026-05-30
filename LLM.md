@@ -187,18 +187,47 @@ Planned work items:
 
 ## 5. Known issues and bugs
 
-*No bugs recorded yet — Phase A just completed.*
+### BUG-001 — run-cfd.sh aborts silently when sourcing OpenFOAM
+- **Discovered:** 2026-05-30, first real run on Kubuntu with OpenFOAM v2406
+- **Symptom:** `bash run-cfd.sh` exited immediately with no output; `bash -x` showed the script stopping at `source /usr/lib/openfoam/openfoam2406/etc/bashrc`
+- **Root cause:** `set -e` at the top of `run-cfd.sh` caused the script to abort when the OpenFOAM bashrc emitted a non-zero exit from an internal subcommand (`pop_var_context: head of shell_variables not a function context`)
+- **Fix:** Wrap the source with `set +e; source "$bashrc" 2>/dev/null; set -e` in `run-cfd.sh`
+- **Status:** FIXED
 
-**Format for future entries:**
+### BUG-002 — run-cfd.sh called wrong Python module
+- **Discovered:** 2026-05-30, first real run on Kubuntu
+- **Symptom:** Program exited with code 0 and no output; no case directory created
+- **Root cause:** `run-cfd.sh` called `python -m vortex_cfd.cli` — this imports the module but never invokes `main()`. The correct entry point is `python -m vortex_cfd` which uses `__main__.py`
+- **Fix:** Changed all `python -m vortex_cfd.cli` to `python -m vortex_cfd` in `run-cfd.sh`
+- **Status:** FIXED
 
-```
-### BUG-001 — [Short title]
-- **Discovered:** YYYY-MM-DD, during [phase/activity]
-- **Symptom:** [What went wrong / what error appeared]
-- **Root cause:** [Why it happened]
-- **Fix:** [What was changed, with file:line references]
-- **Status:** FIXED / OPEN / DEFERRED
-```
+### BUG-003 — `background` patch missing from 0/p and 0/U templates
+- **Discovered:** 2026-05-30, first real run on Kubuntu
+- **Symptom:** `decomposePar` (before snappyHexMesh) crashed: `Cannot find patchField entry for background`
+- **Root cause:** `blockMesh` creates an outer boundary patch named `background`; OpenFOAM requires every patch to have an entry in all initial condition files. The templates only listed wall/inlet/outlet.
+- **Fix:** Added `background { type zeroGradient; }` to `0/p.j2` and `background { type slip; }` to `0/U.j2`
+- **Status:** FIXED
+
+### BUG-004 — Missing `div((nuEff*dev2(T(grad(U)))))` in fvSchemes
+- **Discovered:** 2026-05-30, first real run on Kubuntu with OpenFOAM v2406
+- **Symptom:** `pimpleFoam` crashed on first timestep: `Entry 'div((nuEff*dev2(T(grad(U)))))' not found in dictionary "system/fvSchemes/divSchemes"`
+- **Root cause:** OpenFOAM v2406 with the laminar Stokes model requires an explicit `divSchemes` entry for the viscous stress term. This was not required (or was implicit) in v2512 for which the template was written.
+- **Fix:** Added `div((nuEff*dev2(T(grad(U))))) Gauss linear;` to `divSchemes` in `system/fvSchemes.j2`. Entry is harmless in later versions — OpenFOAM ignores unused divScheme entries.
+- **Status:** FIXED
+
+### BUG-006 — locationInMesh falls outside the vessel lumen
+- **Discovered:** 2026-05-30, first visual inspection in ParaView after Phase A validation run
+- **Symptom:** Glyphs (velocity vectors) appear only in the background mesh (the blockMesh cube), not inside the vessel. The vessel interior has no fluid cells — the fluid domain is the space *around* the vessel, not inside it.
+- **Root cause:** `_location_in_mesh()` used the centre of the wall STL bounding box. For curved/C-shaped vessels this point falls inside the wall material, so snappyHexMesh treats the outside of the vessel as the fluid domain and the inside as solid. Documented as a known limitation in D-003.
+- **Fix:** Replaced with inlet-centroid method: compute the area-weighted centroid and normal of the inlet cap STL, then step one inlet-radius inward (negating the outward-pointing cap normal). This guarantees the point is inside the lumen. See `case_builder.py:_location_in_mesh()`.
+- **Status:** FIXED
+
+### BUG-005 — snappyHexMesh segfault during parallel load balancing (v2406)
+- **Discovered:** 2026-05-30, first real run on Kubuntu with OpenFOAM v2406
+- **Symptom:** `snappyHexMesh -parallel` crashed with segfault (signal 11) inside `fvMeshDistribute::repatch` during shell refinement iteration 0, after reporting `max unbalance 0.237 > allowable 0.1`
+- **Root cause:** Bug in OpenFOAM v2406's parallel mesh redistribution (`fvMeshDistribute::repatch → polyTopoChange::changeMesh`). Triggered when the load balancer tries to redistribute cells after shell refinement.
+- **Fix:** Run `snappyHexMesh` in serial regardless of `--cores`. Parallel solving with `pimpleFoam` is unaffected. See `runner.py` comment. May be fixed in v2412+.
+- **Status:** FIXED
 
 ---
 
@@ -214,9 +243,9 @@ The prior iteration (VesselForge_AutoCFD) applied scaling to the geometry in mem
 *2026-05-26*
 Prior iteration wrote this file before the directory was created, leading to a race condition where the file was created in the current working directory instead. `case_builder.py` now writes it as the last step before returning.
 
-### D-003 — `locationInMesh` = centre of wall STL bounding box
-*2026-05-26*
-Chosen for simplicity in Phase A. Works for typical ICA aneurysm geometries (roughly convex lumen). Known failure mode: highly curved vessels where the bounding-box centre falls inside the wall material. Phase B will replace this with an inlet-normal displacement method (see Phase B item 3).
+### D-003 — `locationInMesh` = inlet centroid displaced one radius inward
+*2026-05-26 (initial); revised 2026-05-30*
+Originally used the centre of the wall STL bounding box — failed on the first real patient geometry (curved ICA) because the bbox centre fell inside the wall material, causing the fluid domain to be the exterior of the vessel. Replaced with: compute area-weighted centroid and normal of the inlet cap STL, step one inlet-radius inward along the negated cap normal. Cap normals point outward by VMTK convention, so negating gives the inward direction. This is robust for any vessel with a visible inlet opening.
 
 ### D-004 — `flowRateInletVelocity` with `outOfBounds repeat`
 *2026-05-26*
@@ -241,31 +270,11 @@ The PIMPLE algorithm with 2 outer correctors gives a good balance between stabil
 
 ## ⚡ NEXT ACTION (start here)
 
-**Run the full OpenFOAM pipeline against the real patient STL (Phase A validation).**
+**Phase A is COMPLETE. Begin Phase B.**
 
-Everything is confirmed ready:
-- OpenFOAM v2512 found at `/usr/lib/openfoam/openfoam2512/etc/bashrc` (picked up automatically by `run-cfd.sh`)
-- STL files confirmed at `/home/diogovluz/Documentos/Programas/Programa VMTK/`
-  - `output_wall.stl` → wall (31346 cells, area 598 mm²)
-  - `input_cap_2.stl` → inlet (48 cells, area 6.5 mm²)
-  - `output_cap_3.stl` → outlet (48 cells, area 1.8 mm²)
-  - `output_cap_4.stl` → outlet (48 cells, area 3.2 mm²)
-- Geometry is mm-scale (max extent ~36 mm) — auto-scaling ×0.001 will trigger correctly
-- `vortex-aneurysm` conda env has all Python deps installed
+Phase A was fully validated on 2026-05-30 on Kubuntu (Ryzen 5 5600X, OpenFOAM v2406). Velocity field confirmed inside the vessel lumen in ParaView. 6 bugs were found and fixed during the first real run (see Section 5).
 
-**Command to run (single line, paste into terminal, interactive labelling):**
-
-```bash
-bash /home/diogovluz/Documentos/Programas/vortex-cfd/run-cfd.sh --stl-dir '/home/diogovluz/Documentos/Programas/Programa VMTK' --cycles 1 --mean-velocity 0.4 --cores 4 --out-dir /tmp/vortex_test
-```
-
-Use `--cycles 1` for the first test run (faster). When the interactive labeller prompts, assign:
-- `output_wall.stl` → `wall`
-- `input_cap_2.stl` → `inlet`
-- `output_cap_3.stl` → `outlet`
-- `output_cap_4.stl` → `outlet`
-
-**Success criterion:** `case_XXXXXXXX_XXXXXX.foam` appears in `/tmp/vortex_test/` and opens in ParaView showing velocity fields. If anything fails, record it as a bug in Section 5 and fix before starting Phase B.
+**Start with Phase B item 1: Womersley inlet profile.**
 
 ---
 
@@ -275,4 +284,5 @@ Use `--cycles 1` for the first test run (faster). When the interactive labeller 
 |---|---|
 | 2026-05-26 | Phase A implementation: all Python modules + 13 OpenFOAM templates + Allrun script. Syntax-validated. Not yet run against real STLs on Linux. |
 | 2026-05-26 | pytest suite: 99 tests across 4 files (waveform, scaling, case_builder, env_check). All pass on Windows with synthetic pyvista geometry. Added pyproject.toml. |
-| 2026-05-29 | Phase A validation (partial): pytest confirmed 99/99 pass on Linux in vortex-aneurysm env. Fixed smoke_test.sh (OUT_DIR/STL_DIR/REPO_ROOT not exported — Python subprocess couldn't read them via os.environ). Smoke test PASSED with real VMTK STLs. OpenFOAM v2512 confirmed at standard path. Full mesher+solver run not yet executed — see NEXT ACTION above. |
+| 2026-05-29 | Phase A validation (partial): pytest confirmed 99/99 pass on Linux in vortex-aneurysm env. Fixed smoke_test.sh (OUT_DIR/STL_DIR/REPO_ROOT not exported — Python subprocess couldn't read them via os.environ). Smoke test PASSED with real VMTK STLs. OpenFOAM v2406 confirmed at standard path. Full mesher+solver run not yet executed. |
+| 2026-05-30 | Phase A fully validated on Kubuntu desktop (Ryzen 5 5600X, OpenFOAM v2406). Fixed 6 bugs during first real run (see Section 5). Key fixes: run-cfd.sh conda/venv detection, `-m vortex_cfd` entry point, background patch in 0/U and 0/p, div(nuEff) in fvSchemes, snappyHexMesh serial-only workaround for v2406 segfault, locationInMesh replaced with inlet-centroid method. Velocity field confirmed inside vessel lumen in ParaView. **Phase A COMPLETE.** |

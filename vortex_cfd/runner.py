@@ -92,14 +92,12 @@ def run_pipeline(case_dir: Path, of_env: dict, cores: int | None) -> None:
     _run("surfaceFeatureExtract",           case_dir, env, "surfaceFeatureExtract")
     _run("blockMesh",                        case_dir, env, "blockMesh")
 
-    if parallel:
-        _run("decomposePar",                 case_dir, env, "decomposePar (snappyHexMesh)")
-
-    snap_cmd = f"{mpi}snappyHexMesh -overwrite" + (" -parallel" if parallel else "")
-    _run(snap_cmd,                           case_dir, env, "snappyHexMesh")
-
-    if parallel:
-        _run("reconstructParMesh -constant", case_dir, env, "reconstructParMesh")
+    # snappyHexMesh runs in serial regardless of --cores. The parallel load-
+    # balancing pass in v2406 has a segfault bug (fvMeshDistribute::repatch)
+    # triggered when unbalance > 0.1 during shell refinement. Serial meshing
+    # is safe and fast enough for typical ICA geometries (~2 min on 6 cores
+    # would only save ~30 s). Parallel solving below is unaffected.
+    _run("snappyHexMesh -overwrite",        case_dir, env, "snappyHexMesh")
 
     check_out = _run("checkMesh",            case_dir, env, "checkMesh")
     _check_mesh_quality(check_out)

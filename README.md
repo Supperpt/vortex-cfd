@@ -126,8 +126,32 @@ Phase A in progress — repository scaffolding only. No runnable code yet.
 
 - Linux (native; not WSL).
 - OpenFOAM **v2512** from openfoam.com. *This is the ESI/OpenCFD release, not the Foundation v12 from openfoam.org.* The two are parallel forks of the same project with slightly different dict syntax and function object catalogues. All templates here are written for ESI v2512; v2406, v2412, and v2506 are also accepted.
-- The `vortex-aneurysm` conda environment from the VORTEX project (reused — no need to recreate).
-- Python 3.10+ with `jinja2`, `numpy`, `pyvista`, `click`.
+- Python 3.10+.
+
+## Setup (one-time)
+
+Install [Miniconda](https://docs.conda.io/en/latest/miniconda.html), then:
+
+```bash
+conda create -n vortex-aneurysm python=3.12 -y
+conda activate vortex-aneurysm
+cd vortex-cfd
+bash setup.sh
+```
+
+## Usage
+
+Every new terminal session, activate the environment first:
+
+```bash
+conda activate vortex-aneurysm
+```
+
+Then run the pipeline:
+
+```bash
+bash run-cfd.sh --stl-dir <path/to/stls> --cycles 3 --mean-velocity 0.4 --cores 4 --out-dir <output-dir>
+```
 
 ---
 
