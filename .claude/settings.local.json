@@ -9,7 +9,11 @@
       "Bash(python *)",
       "Bash(conda activate *)",
       "Bash(conda run *)",
-      "Bash(STL_DIR='/home/diogovluz/Documentos/Programas/Programa VMTK' conda run *)"
+      "Bash(STL_DIR='/home/diogovluz/Documentos/Programas/Programa VMTK' conda run *)",
+      "Bash(conda env *)",
+      "Bash(pip3 show *)",
+      "Read(//usr/lib/openfoam/**)",
+      "Read(//opt/**)"
     ]
   }
 }

@@ -56,11 +56,32 @@ def _background_cell_counts(bbox: dict, target: float = 0.002) -> dict:
     }
 
 
-def _location_in_mesh(wall_stl: Path) -> tuple[float, float, float]:
-    """Approximate interior point: centre of the wall STL bounding box."""
-    mesh = pv.read(str(wall_stl))
-    c = mesh.center
-    return (float(c[0]), float(c[1]), float(c[2]))
+def _location_in_mesh(inlet_stl: Path) -> tuple[float, float, float]:
+    """
+    Interior point guaranteed to be inside the lumen: inlet face centroid
+    displaced one inlet-radius inward along the area-weighted face normal.
+
+    This replaces the bounding-box centre of the wall STL, which fails for
+    curved vessels where the bbox centre falls inside the wall material.
+    """
+    mesh = pv.read(str(inlet_stl))
+    sized = mesh.compute_cell_sizes()
+    areas = sized.cell_data["Area"]
+    total_area = areas.sum()
+    radius = float(np.sqrt(total_area / np.pi))
+
+    # Area-weighted centroid and normal
+    pts = np.array(mesh.cell_centers().points)
+    centroid = (areas[:, None] * pts).sum(axis=0) / total_area
+
+    normals = np.array(mesh.compute_normals(cell_normals=True, point_normals=False).cell_data["Normals"])
+    avg_normal = (areas[:, None] * normals).sum(axis=0)
+    avg_normal /= np.linalg.norm(avg_normal)
+
+    # Step one radius inward (negate normal — cap normals point outward)
+    interior = centroid - avg_normal * radius
+
+    return (float(interior[0]), float(interior[1]), float(interior[2]))
 
 
 def _inlet_area(inlet_stl: Path) -> float:
@@ -122,7 +143,7 @@ def build_case(
 
     bbox = _bbox_with_buffer(wall_stl)
     cell_counts = _background_cell_counts(bbox)
-    loc = _location_in_mesh(wall_stl)
+    loc = _location_in_mesh(inlet_stl)
     area = _inlet_area(inlet_stl)
     table = _waveform_table(waveform, mean_velocity, area)
 
