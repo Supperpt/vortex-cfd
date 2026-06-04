@@ -26,16 +26,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ -f "$SCRIPT_DIR/.venv/bin/python" ]; then
     exec "$SCRIPT_DIR/.venv/bin/python" -m vortex_cfd "$@"
-elif [ -n "$CONDA_PREFIX" ]; then
+elif [ "${CONDA_DEFAULT_ENV:-}" = "vortex-aneurysm" ] && [ -n "$CONDA_PREFIX" ]; then
     exec "$CONDA_PREFIX/bin/python" -m vortex_cfd "$@"
 else
-    # Try to find conda and use it
+    # Active env is not vortex-aneurysm — activate it and run Python directly.
     CONDA_SH="$HOME/miniconda3/etc/profile.d/conda.sh"
     if [ -f "$CONDA_SH" ]; then
         source "$CONDA_SH"
-        exec conda run -n vortex-aneurysm python -m vortex_cfd.cli "$@"
+        conda activate vortex-aneurysm
+        exec "$CONDA_PREFIX/bin/python" -m vortex_cfd "$@"
     else
-        echo "ERROR: Could not find conda or .venv. Run setup first." >&2
+        echo "ERROR: Could not find conda or .venv. Activate vortex-aneurysm or run setup.sh first." >&2
         exit 1
     fi
 fi

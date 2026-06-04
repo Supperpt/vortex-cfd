@@ -286,19 +286,12 @@ Implemented on the `biomarker_development` branch: `--postprocess` / `--postproc
 `wallShearStress` + `fieldAverage` function objects, and `postprocess.py` (TAWSS/OSI/metrics_report.json).
 All Phase C unit tests pass (pure numpy, no OpenFOAM needed).
 
-**The one thing not yet validated:** `read_wss_series` against real OpenFOAM output — i.e. whether
-`pv.OpenFOAMReader` exposes the `wall` boundary patch and its `wallShearStress` cell data the way the
-code assumes. This is the flagged risk.
+**Phase C is COMPLETE and validated (2026-06-04).** Full run on real patient geometry confirmed correct
+WSS fields in ParaView and physiologically plausible `metrics_report.json` (TAWSS mean 9.83 Pa, OSI mean 0.019).
 
-**Do this next (fastest confidence):**
-```bash
-bash run-cfd.sh --postprocess-only <an existing solved case_*/ from the v2406 run>
-```
-Confirm `metrics_report.json` is written with TAWSS ~0.4–50 Pa and OSI 0–0.5. If `read_wss_series`
-fails on patch/array access, adjust `_wall_block` / `_wss_from_block` to match the actual MultiBlock
-layout the reader returns.
+**Next: Phase B — Womersley inlet profile (item 1).**
 
-After Phase C is validated → Phase B (Womersley inlet profile), or the deferred `--screenshots`.
+Deferred Phase C item: `--screenshots` (pvbatch renders of WSS/OSI/TAWSS). Add after Phase B if needed for paper figures.
 
 ---
 
@@ -310,4 +303,4 @@ After Phase C is validated → Phase B (Womersley inlet profile), or the deferre
 | 2026-05-26 | pytest suite: 99 tests across 4 files (waveform, scaling, case_builder, env_check). All pass on Windows with synthetic pyvista geometry. Added pyproject.toml. |
 | 2026-05-29 | Phase A validation (partial): pytest confirmed 99/99 pass on Linux in vortex-aneurysm env. Fixed smoke_test.sh (OUT_DIR/STL_DIR/REPO_ROOT not exported — Python subprocess couldn't read them via os.environ). Smoke test PASSED with real VMTK STLs. OpenFOAM v2406 confirmed at standard path. Full mesher+solver run not yet executed. |
 | 2026-05-30 | Phase A fully validated on Kubuntu desktop (Ryzen 5 5600X, OpenFOAM v2406). Fixed 6 bugs during first real run (see Section 5). Key fixes: run-cfd.sh conda/venv detection, `-m vortex_cfd` entry point, background patch in 0/U and 0/p, div(nuEff) in fvSchemes, snappyHexMesh serial-only workaround for v2406 segfault, locationInMesh replaced with inlet-centroid method. Velocity field confirmed inside vessel lumen in ParaView. **Phase A COMPLETE.** |
-| 2026-06-04 | Phase C implemented (prioritised ahead of Phase B for initial publishable biomarkers). New `postprocess.py` (pure TAWSS/OSI/summary-stats math + pyvista I/O layer), `wallShearStress`+`fieldAverage` function objects in controlDict (gated on `--postprocess`), `--postprocess` and `--postprocess-only` CLI flags, `run_postprocess_only` in runner. WSS reported in both kinematic and Pa; screenshots deferred. 21 new unit tests pass (120 total, 1 pre-existing fixture failure documented in §3). **Not yet run against real OpenFOAM output — `read_wss_series` / pyvista patch access is the open validation step.** |
+| 2026-06-04 | Phase C implemented and fully validated on a real patient geometry (OpenFOAM v2406, 6 cores, 3 cycles). `metrics_report.json`: TAWSS mean 9.83 Pa, OSI mean 0.019, low-WSS area 0.17%, high-OSI area 0.84% — all clinically plausible. `wallShearStress` confirmed visible in ParaView with correct pulsatile temporal behaviour. Also fixed `run-cfd.sh` conda env detection (base env / space-in-path bugs). **Phase C COMPLETE.** |
