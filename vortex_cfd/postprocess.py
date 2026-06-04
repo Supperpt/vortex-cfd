@@ -18,6 +18,7 @@ function object's ``wallShearStressMean`` is only a ParaView convenience.
 """
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +26,8 @@ import numpy as np
 import pyvista as pv
 
 from .waveform import T_CYCLE
+
+log = logging.getLogger("vortex_cfd")
 
 # Default fluid properties (kept in sync with case_builder defaults).
 RHO = 1060.0      # kg/m^3, whole blood
@@ -264,8 +267,8 @@ def compute_metrics(
         t_max = max(available_times(case_dir))
         t_start = max(0.0, t_max - t_cycle)
 
-    print(f"\n[vortex-cfd] Post-processing WSS/TAWSS/OSI over the last cycle "
-          f"(t >= {t_start:.4f}s) ...")
+    log.info("\n[vortex-cfd] Post-processing WSS/TAWSS/OSI over the last cycle "
+             "(t >= %.4fs) ...", t_start)
 
     times, wss, areas = read_wss_series(case_dir, t_start, wall_patch)
     weights = _time_weights(times)
@@ -294,24 +297,23 @@ def compute_metrics(
     out = case_dir / "metrics_report.json"
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
-    # Human-readable summary
-    print(f"  Wall faces analysed : {stats['n_wall_faces']} "
-          f"({stats['wall_area_m2']*1e6:.1f} mm^2)")
-    print(f"  Snapshots           : {report['n_snapshots']} "
-          f"over [{times[0]:.4f}, {times[-1]:.4f}] s")
-    print(f"  TAWSS (Pa)          : mean {stats['tawss_pa']['mean']:.3f}, "
-          f"max {stats['tawss_pa']['max']:.3f}")
-    print(f"  OSI                 : mean {stats['osi']['mean']:.4f}, "
-          f"max {stats['osi']['max']:.4f}")
-    print(f"  Low-WSS area (<0.4 Pa)   : "
-          f"{stats['area_fraction_tawss_lt_0p4pa']*100:.1f} %")
-    print(f"  High-OSI area (>0.3)     : "
-          f"{stats['area_fraction_osi_gt_0p3']*100:.1f} %")
+    log.info("  Wall faces analysed : %d (%.1f mm^2)",
+             stats['n_wall_faces'], stats['wall_area_m2'] * 1e6)
+    log.info("  Snapshots           : %d over [%.4f, %.4f] s",
+             report['n_snapshots'], times[0], times[-1])
+    log.info("  TAWSS (Pa)          : mean %.3f, max %.3f",
+             stats['tawss_pa']['mean'], stats['tawss_pa']['max'])
+    log.info("  OSI                 : mean %.4f, max %.4f",
+             stats['osi']['mean'], stats['osi']['max'])
+    log.info("  Low-WSS area (<0.4 Pa)   : %.1f %%",
+             stats['area_fraction_tawss_lt_0p4pa'] * 100)
+    log.info("  High-OSI area (>0.3)     : %.1f %%",
+             stats['area_fraction_osi_gt_0p3'] * 100)
 
     if not in_wss_range:
-        print(f"  WARNING: TAWSS outside the expected 0–{WSS_MAX_PA:.0f} Pa range.")
+        log.warning("TAWSS outside the expected 0–%.0f Pa range.", WSS_MAX_PA)
     if not in_osi_range:
-        print(f"  WARNING: OSI outside the expected 0–{OSI_MAX} range.")
+        log.warning("OSI outside the expected 0–%.1f range.", OSI_MAX)
 
-    print(f"  Report written      : {out}")
+    log.info("  Report written      : %s", out)
     return report

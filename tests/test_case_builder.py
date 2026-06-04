@@ -185,7 +185,7 @@ REQUIRED_FILES = [
 @pytest.fixture
 def built_case(scaled_stls_m, tmp_path):
     wf = load_waveform(None)
-    return build_case(
+    case_dir, _ = build_case(
         scaled_stls=scaled_stls_m,
         labels={},
         cycles=1,
@@ -194,13 +194,14 @@ def built_case(scaled_stls_m, tmp_path):
         cores=2,
         out_dir=str(tmp_path),
     )
+    return case_dir
 
 
 @pytest.fixture
 def built_case_pp(scaled_stls_m, tmp_path):
     """Case built with postprocess=True → controlDict gets the function objects."""
     wf = load_waveform(None)
-    return build_case(
+    case_dir, _ = build_case(
         scaled_stls=scaled_stls_m,
         labels={},
         cycles=3,
@@ -210,6 +211,24 @@ def built_case_pp(scaled_stls_m, tmp_path):
         out_dir=str(tmp_path),
         postprocess=True,
     )
+    return case_dir
+
+
+@pytest.fixture
+def built_case_wom(scaled_stls_m, tmp_path):
+    """Case built with womersley=True → 0/U uses timeVaryingMappedFixedValue."""
+    wf = load_waveform(None)
+    case_dir, _ = build_case(
+        scaled_stls=scaled_stls_m,
+        labels={},
+        cycles=3,
+        mean_velocity=0.4,
+        waveform=wf,
+        cores=2,
+        out_dir=str(tmp_path),
+        womersley=True,
+    )
+    return case_dir
 
 
 class TestBuildCase:
@@ -307,3 +326,18 @@ class TestBuildCasePostprocess:
     def test_wall_shear_stress_targets_wall_patch(self, built_case_pp):
         text = (built_case_pp / "system" / "controlDict").read_text()
         assert "patches         (wall)" in text
+
+
+class TestBuildCaseWomersley:
+    def test_u_uses_time_varying_mapped(self, built_case_wom):
+        text = (built_case_wom / "0" / "U").read_text()
+        assert "timeVaryingMappedFixedValue" in text
+
+    def test_u_no_flow_rate_inlet_for_womersley(self, built_case_wom):
+        text = (built_case_wom / "0" / "U").read_text()
+        assert "flowRateInletVelocity" not in text
+
+    def test_default_u_is_flow_rate_inlet(self, built_case):
+        text = (built_case / "0" / "U").read_text()
+        assert "flowRateInletVelocity" in text
+        assert "timeVaryingMappedFixedValue" not in text

@@ -1,9 +1,12 @@
 """Click-based entry point for vortex-cfd."""
 
+import logging
 import sys
 from pathlib import Path
 
 import click
+
+log = logging.getLogger("vortex_cfd")
 
 from .env_check import check_openfoam
 from .patch_labeller import label_patches
@@ -11,6 +14,13 @@ from .scaling import scale_stls
 from .waveform import load_waveform
 from .case_builder import build_case
 from .runner import run_pipeline, run_postprocess_only
+
+
+def _add_file_handler(case_dir: Path) -> None:
+    """Attach a FileHandler writing to <case_dir>/vortex_cfd.log."""
+    fh = logging.FileHandler(case_dir / "vortex_cfd.log")
+    fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logging.getLogger("vortex_cfd").addHandler(fh)
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
@@ -35,8 +45,16 @@ from .runner import run_pipeline, run_postprocess_only
               type=click.Path(exists=True, file_okay=False),
               help="Skip meshing/solving; compute biomarkers on an existing solved "
                    "case directory (re-uses or regenerates the WSS field).")
+@click.option("--womersley",     is_flag=True, default=False,
+              help="Use the full Womersley analytical inlet profile instead of "
+                   "the default parabolic (flowRateInletVelocity). Requires a "
+                   "second meshing step to write per-face velocity data. "
+                   "Recommended for academic publication.")
+@click.option("--dry-run",       is_flag=True, default=False,
+              help="Build the case directory but skip meshing and solving. "
+                   "Useful for inspecting generated dicts before committing CPU time.")
 def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
-         postprocess, postprocess_only):
+         postprocess, postprocess_only, womersley, dry_run):
     """
     Automated pulsatile CFD for cerebral aneurysms.
 
@@ -46,27 +64,28 @@ def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
     # Standalone post-processing of an existing case — no meshing/solving.
     if postprocess_only:
         of_env = check_openfoam()
-        click.echo(f"OpenFOAM {of_env['version']} detected at {of_env['root'] or '(sourced)'}")
-        click.echo(f"Post-processing existing case: {postprocess_only}")
+        log.info("OpenFOAM %s detected at %s", of_env['version'], of_env['root'] or '(sourced)')
+        log.info("Post-processing existing case: %s", postprocess_only)
+        _add_file_handler(Path(postprocess_only))
         run_postprocess_only(Path(postprocess_only), of_env, cycles=cycles)
         return
 
     # Normal run requires the patient-specific inputs.
     if stl_dir is None or mean_velocity is None:
-        click.echo("ERROR: --stl-dir and --mean-velocity are required "
-                   "(unless using --postprocess-only).", err=True)
+        log.error("--stl-dir and --mean-velocity are required "
+                  "(unless using --postprocess-only).")
         sys.exit(1)
 
     # 1. Validate OpenFOAM environment
     of_env = check_openfoam()
-    click.echo(f"OpenFOAM {of_env['version']} detected at {of_env['root'] or '(sourced)'}")
+    log.info("OpenFOAM %s detected at %s", of_env['version'], of_env['root'] or '(sourced)')
 
     # 2. Find STLs
     stl_paths = sorted(Path(stl_dir).glob("*.stl"))
     if not stl_paths:
-        click.echo(f"ERROR: No STL files found in {stl_dir}", err=True)
+        log.error("No STL files found in %s", stl_dir)
         sys.exit(1)
-    click.echo(f"Found {len(stl_paths)} STL file(s): {[p.name for p in stl_paths]}")
+    log.info("Found %d STL file(s): %s", len(stl_paths), [p.name for p in stl_paths])
 
     # 3. Interactive labelling
     labels = label_patches(stl_paths)
@@ -77,12 +96,12 @@ def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
     # 5. Load waveform
     waveform = load_waveform(waveform_csv)
     if waveform_csv:
-        click.echo(f"Using user waveform: {waveform_csv}")
+        log.info("Using user waveform: %s", waveform_csv)
     else:
-        click.echo("Using built-in analytical ICA waveform.")
+        log.info("Using built-in analytical ICA waveform.")
 
     # 6. Build OpenFOAM case directory
-    case_dir = build_case(
+    case_dir, inlet_params = build_case(
         scaled_stls=scaled_stls,
         labels=labels,
         cycles=cycles,
@@ -91,8 +110,14 @@ def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
         cores=cores,
         out_dir=out_dir,
         postprocess=postprocess,
+        womersley=womersley,
     )
-    click.echo(f"Case directory created: {case_dir}")
+    log.info("Case directory created: %s", case_dir)
+    _add_file_handler(case_dir)
+
+    if dry_run:
+        log.info("--dry-run: case directory built; meshing and solving skipped.")
+        return
 
     # 7. Run the pipeline
     run_pipeline(
@@ -101,4 +126,6 @@ def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
         cores=cores,
         cycles=cycles,
         postprocess_metrics=postprocess,
+        womersley=womersley,
+        inlet_params=inlet_params,
     )

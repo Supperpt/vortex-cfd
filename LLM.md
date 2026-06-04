@@ -34,7 +34,8 @@ DICOM (Angio-CT)  →[VORTEX]→  Watertight STL  →[vortex-cfd]→  WSS / OSI 
 | Advection scheme | Gauss linearUpwind | Stable, ~2nd-order |
 | Adaptive Δt | maxCo = 0.8 | Mandatory — peak systole is ~10× diastole |
 | Cardiac period | T = 0.857 s | 70 bpm default |
-| Inlet BC | flowRateInletVelocity | Uniform parabolic; Womersley in Phase B |
+| Inlet BC (default) | flowRateInletVelocity | Uniform parabolic (Poiseuille); always the default |
+| Inlet BC (opt-in) | timeVaryingMappedFixedValue + Womersley | `--womersley` flag; full analytical solution via scipy Bessel functions; see Phase B notes |
 | Outlet BC | inletOutlet (U), fixedValue 0 (p) | Prevents recirculation instability |
 | Wall BC | noSlip (U), zeroGradient (p) | Standard rigid-wall |
 | BL layers | 4 prismatic, expansion 1.3, finalLayerThickness 0.3 | Required for WSS accuracy |
@@ -51,11 +52,12 @@ Run with: `pytest` (from the repo root, after `pip install -e .`).
 |---|---|---|
 | `tests/test_waveform.py` | Default waveform shape/normalisation, CSV loading | 15 |
 | `tests/test_scaling.py` | mm detection, scaling factor, canonical name assignment | 14 |
-| `tests/test_case_builder.py` | bbox+buffer, cell counts, inlet area, locationInMesh, waveform table, full case generation, postprocess function objects | 64 |
+| `tests/test_case_builder.py` | bbox+buffer, cell counts, inlet area, locationInMesh, waveform table, full case generation, postprocess/Womersley BC types | 67 |
 | `tests/test_postprocess.py` | TAWSS/OSI/summary-stats pure math (no OpenFOAM): OSI=0 unidirectional, OSI=0.5 reversing, Pa=ρ×kinematic, area fractions | 16 |
+| `tests/test_womersley.py` | Fourier coefficients, Womersley shape normalisation, velocity area-mean, direction, write_boundary_data file structure | 16 |
 | `tests/test_env_check.py` | `_normalise`, accepted versions, `_active_version` with monkeypatching | 11 |
 
-Total: **120 tests** (validated 2026-05-26 on Windows with synthetic STL geometry).
+Total: **139 tests, 138 pass** (1 pre-existing fixture failure).
 
 > **Known pre-existing failure:** `TestLocationInMesh::test_location_inside_wall_bbox` fails on the
 > current Linux/pyvista combination — the synthetic flat-disc fixture (`conftest._disc_stl`) yields an
@@ -87,6 +89,7 @@ vortex-cfd/
 │   ├── waveform.py                ← default ICA waveform + user CSV loader
 │   ├── case_builder.py            ← geometry analysis + Jinja2 rendering
 │   ├── postprocess.py             ← Phase C: WSS/TAWSS/OSI biomarkers + metrics_report.json
+│   ├── womersley.py               ← Phase B: Womersley inlet profile (scipy Bessel, boundaryData writer)
 │   ├── runner.py                  ← pipeline orchestration (subprocess calls)
 │   └── templates/
 
@@ -139,7 +142,19 @@ vortex-cfd/
 
 ---
 
-### Phase B — Robustness and Womersley (PLANNED)
+### Phase B — Robustness and Womersley (COMPLETE — 2026-06-04)
+
+**Womersley implementation:**
+- No native Womersley BC in OpenFOAM v2406 (confirmed by source search).
+- `timeVaryingMappedFixedValue` (not `codedFixedValue`): Python writes per-face velocity
+  vectors into `constant/boundaryData/inlet/<t>/U` after snappyHexMesh; OpenFOAM reads them.
+- Math: `scipy.special.jv(0, Λ_k·r/R)`, `Λ_k = i^(3/2)·α_k`, `α_k = R·√(k·ω/ν)`. FFT decomposition.
+  Approach confirmed by [inlet-mapping-toolkit/profiles.py](https://github.com/JieWangnk/inlet-mapping-toolkit/blob/main/inlet_mapper/profiles.py).
+- Default always `flowRateInletVelocity` (parabolic). Womersley opt-in via `--womersley`.
+- scipy added to requirements.txt. New module: `vortex_cfd/womersley.py`.
+- Brief retrograde flow near the wall at diastole is physically correct — NOT clipped.
+
+
 
 **Goal:** Production-grade inlet physics and hardened meshing.
 
@@ -286,12 +301,21 @@ Implemented on the `biomarker_development` branch: `--postprocess` / `--postproc
 `wallShearStress` + `fieldAverage` function objects, and `postprocess.py` (TAWSS/OSI/metrics_report.json).
 All Phase C unit tests pass (pure numpy, no OpenFOAM needed).
 
-**Phase C is COMPLETE and validated (2026-06-04).** Full run on real patient geometry confirmed correct
-WSS fields in ParaView and physiologically plausible `metrics_report.json` (TAWSS mean 9.83 Pa, OSI mean 0.019).
+**Phase B and C are both COMPLETE (2026-06-04).** All 5 Phase B items implemented and tested.
 
-**Next: Phase B — Womersley inlet profile (item 1).**
+**Phase B summary:**
+- `--womersley`: `timeVaryingMappedFixedValue` with scipy Bessel functions; per-face data written after SHM
+- `--dry-run`: build case, skip solver
+- Physiological flow-rate warning (1–10 mL/s ICA range)
+- SHM retry: up to 3 attempts with halved target cell size
+- Structured logging: `logging.getLogger("vortex_cfd")` + `vortex_cfd.log` file in case dir
 
-Deferred Phase C item: `--screenshots` (pvbatch renders of WSS/OSI/TAWSS). Add after Phase B if needed for paper figures.
+**Not yet validated on real hardware:** `--womersley` flag (requires an OpenFOAM run). All unit tests pass.
+
+**Next options:**
+1. Validate `--womersley` on a real patient geometry (run with flag, open in ParaView, check M-shaped systolic profile)
+2. `--screenshots` deferred Phase C item (pvbatch renders of WSS/OSI/TAWSS)
+3. Phase D (Carreau non-Newtonian, k-ω SST turbulence)
 
 ---
 
@@ -304,3 +328,4 @@ Deferred Phase C item: `--screenshots` (pvbatch renders of WSS/OSI/TAWSS). Add a
 | 2026-05-29 | Phase A validation (partial): pytest confirmed 99/99 pass on Linux in vortex-aneurysm env. Fixed smoke_test.sh (OUT_DIR/STL_DIR/REPO_ROOT not exported — Python subprocess couldn't read them via os.environ). Smoke test PASSED with real VMTK STLs. OpenFOAM v2406 confirmed at standard path. Full mesher+solver run not yet executed. |
 | 2026-05-30 | Phase A fully validated on Kubuntu desktop (Ryzen 5 5600X, OpenFOAM v2406). Fixed 6 bugs during first real run (see Section 5). Key fixes: run-cfd.sh conda/venv detection, `-m vortex_cfd` entry point, background patch in 0/U and 0/p, div(nuEff) in fvSchemes, snappyHexMesh serial-only workaround for v2406 segfault, locationInMesh replaced with inlet-centroid method. Velocity field confirmed inside vessel lumen in ParaView. **Phase A COMPLETE.** |
 | 2026-06-04 | Phase C implemented and fully validated on a real patient geometry (OpenFOAM v2406, 6 cores, 3 cycles). `metrics_report.json`: TAWSS mean 9.83 Pa, OSI mean 0.019, low-WSS area 0.17%, high-OSI area 0.84% — all clinically plausible. `wallShearStress` confirmed visible in ParaView with correct pulsatile temporal behaviour. Also fixed `run-cfd.sh` conda env detection (base env / space-in-path bugs). **Phase C COMPLETE.** |
+| 2026-06-04 | Phase B fully implemented (code-complete, not yet validated on real hardware). All 5 items: Womersley (`--womersley`, `timeVaryingMappedFixedValue`, scipy Bessel, no clip for retrograde flow), `--dry-run`, physiological flow-rate warning, SHM retry (3 attempts, halved target), structured logging (`vortex_cfd.log` in case dir). scipy added to requirements.txt. 19 new tests (139 total, 138 pass). **Phase B COMPLETE pending hardware validation.** |

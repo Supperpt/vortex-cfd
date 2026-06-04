@@ -1,10 +1,13 @@
 """Build the OpenFOAM case directory from scaled STLs and simulation parameters."""
 
 import json
+import logging
 import multiprocessing
 import shutil
 from datetime import datetime
 from pathlib import Path
+
+log = logging.getLogger("vortex_cfd")
 
 import numpy as np
 import pyvista as pv
@@ -56,13 +59,16 @@ def _background_cell_counts(bbox: dict, target: float = 0.002) -> dict:
     }
 
 
-def _location_in_mesh(inlet_stl: Path) -> tuple[float, float, float]:
+def _inlet_geometry(inlet_stl: Path) -> tuple:
     """
-    Interior point guaranteed to be inside the lumen: inlet face centroid
-    displaced one inlet-radius inward along the area-weighted face normal.
+    Compute the geometry of the inlet cap STL:
+        centroid : (3,) area-weighted face centroid [m]
+        normal   : (3,) unit inward normal (VMTK cap normals point outward; negated here)
+        radius   : float, equivalent circular radius [m]
+        interior : (3,) point one radius inward — used as locationInMesh
 
-    This replaces the bounding-box centre of the wall STL, which fails for
-    curved vessels where the bbox centre falls inside the wall material.
+    The interior point is guaranteed inside the lumen for curved vessels.
+    See BUG-006 and D-003.  Replaces the original bounding-box centre approach.
     """
     mesh = pv.read(str(inlet_stl))
     sized = mesh.compute_cell_sizes()
@@ -70,7 +76,6 @@ def _location_in_mesh(inlet_stl: Path) -> tuple[float, float, float]:
     total_area = areas.sum()
     radius = float(np.sqrt(total_area / np.pi))
 
-    # Area-weighted centroid and normal
     pts = np.array(mesh.cell_centers().points)
     centroid = (areas[:, None] * pts).sum(axis=0) / total_area
 
@@ -78,10 +83,20 @@ def _location_in_mesh(inlet_stl: Path) -> tuple[float, float, float]:
     avg_normal = (areas[:, None] * normals).sum(axis=0)
     avg_normal /= np.linalg.norm(avg_normal)
 
-    # Step one radius inward (negate normal — cap normals point outward)
-    interior = centroid - avg_normal * radius
+    inward_normal = -avg_normal          # cap normals point outward by VMTK convention
+    interior = centroid + inward_normal * radius
+    return (
+        centroid.astype(float),
+        inward_normal.astype(float),
+        radius,
+        (float(interior[0]), float(interior[1]), float(interior[2])),
+    )
 
-    return (float(interior[0]), float(interior[1]), float(interior[2]))
+
+def _location_in_mesh(inlet_stl: Path) -> tuple[float, float, float]:
+    """Thin wrapper — backward-compatible entry point used by existing tests."""
+    _, _, _, interior = _inlet_geometry(inlet_stl)
+    return interior
 
 
 def _inlet_area(inlet_stl: Path) -> float:
@@ -115,10 +130,14 @@ def build_case(
     cores: int | None,
     out_dir: str,
     postprocess: bool = False,
-) -> Path:
+    womersley: bool = False,
+) -> tuple:
     """
     Render all Jinja2 templates and assemble the OpenFOAM case directory.
-    Returns the Path to the created directory.
+
+    Returns (case_dir, inlet_params) where inlet_params is a dict with keys
+    'centroid', 'normal', 'radius', 'mean_velocity', 'waveform', 'nu'
+    needed by runner.py to generate Womersley boundary data after meshing.
 
     patch_labels.json is written after the directory exists, not before — avoiding
     the race condition that plagued the prior VesselForge_AutoCFD iteration.
@@ -144,9 +163,16 @@ def build_case(
 
     bbox = _bbox_with_buffer(wall_stl)
     cell_counts = _background_cell_counts(bbox)
-    loc = _location_in_mesh(inlet_stl)
-    area = _inlet_area(inlet_stl)
+    centroid, normal, radius, loc = _inlet_geometry(inlet_stl)
+    area = float(np.pi * radius ** 2)
     table = _waveform_table(waveform, mean_velocity, area)
+
+    # Physiological flow-rate validation (warn only — never abort)
+    Q_mL = mean_velocity * area * 1e6
+    if not (1.0 <= Q_mL <= 10.0):
+        log.warning("Mean flow rate %.2f mL/s is outside the typical ICA range "
+                    "(1–10 mL/s). Check --mean-velocity and ensure the STL is in metres.",
+                    Q_mL)
 
     end_time = cycles * T_CYCLE
     write_interval = T_CYCLE / 50  # 50 snapshots per cycle
@@ -175,6 +201,7 @@ def build_case(
         "case_name":       case_name,
         "postprocess":     postprocess,
         "field_average_start": field_average_start,
+        "womersley":       womersley,
     }
 
     jinja_env = Environment(
@@ -202,4 +229,20 @@ def build_case(
     # ParaView placeholder
     (case_dir / f"{case_name}.foam").touch()
 
-    return case_dir
+    # Params forwarded to runner.py:
+    #   inlet_params  — Womersley geometry + flow data for post-mesh boundaryData
+    #   mesh_params   — bbox + base Jinja context for SHM retry blockMesh re-render
+    inlet_params = {
+        "centroid":      centroid,
+        "normal":        normal,
+        "radius":        radius,
+        "mean_velocity": mean_velocity,
+        "waveform":      waveform,
+        "nu":            3.3e-6,
+        # SHM retry needs to re-render blockMeshDict with a finer target
+        "_bbox":         bbox,
+        "_ctx":          ctx,
+        "_tmpl_dir":     str(TEMPLATES_DIR),
+    }
+
+    return case_dir, inlet_params
