@@ -114,6 +114,7 @@ def build_case(
     waveform: np.ndarray,
     cores: int | None,
     out_dir: str,
+    postprocess: bool = False,
 ) -> Path:
     """
     Render all Jinja2 templates and assemble the OpenFOAM case directory.
@@ -149,6 +150,9 @@ def build_case(
 
     end_time = cycles * T_CYCLE
     write_interval = T_CYCLE / 50  # 50 snapshots per cycle
+    # fieldAverage / Python post-processing analyse only the last cycle; earlier
+    # cycles are discarded as transient initialisation.
+    field_average_start = (cycles - 1) * T_CYCLE
 
     ctx = {
         "wall_patch":      "wall",
@@ -169,6 +173,8 @@ def build_case(
         "nz":              cell_counts["nz"],
         "location_in_mesh": loc,
         "case_name":       case_name,
+        "postprocess":     postprocess,
+        "field_average_start": field_average_start,
     }
 
     jinja_env = Environment(

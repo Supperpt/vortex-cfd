@@ -10,15 +10,15 @@ from .patch_labeller import label_patches
 from .scaling import scale_stls
 from .waveform import load_waveform
 from .case_builder import build_case
-from .runner import run_pipeline
+from .runner import run_pipeline, run_postprocess_only
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
-@click.option("--stl-dir",       required=True, type=click.Path(exists=True, file_okay=False),
+@click.option("--stl-dir",       default=None, type=click.Path(exists=True, file_okay=False),
               help="Directory containing wall + cap STLs from VORTEX (--split-patches).")
-@click.option("--cycles",        required=True, type=int, default=3, show_default=True,
+@click.option("--cycles",        type=int, default=3, show_default=True,
               help="Number of cardiac cycles to simulate (first discarded, last analysed).")
-@click.option("--mean-velocity", required=True, type=float,
+@click.option("--mean-velocity", default=None, type=float,
               help="Time-averaged inlet velocity in m/s (typical ICA: 0.3–0.5).")
 @click.option("--waveform",      "waveform_csv", default=None,
               type=click.Path(exists=True, dir_okay=False),
@@ -28,13 +28,35 @@ from .runner import run_pipeline
 @click.option("--out-dir",       default=".", show_default=True,
               type=click.Path(file_okay=False),
               help="Parent directory for the OpenFOAM case directory.")
-def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir):
+@click.option("--postprocess",   is_flag=True, default=False,
+              help="Compute WSS/TAWSS/OSI biomarkers and write metrics_report.json "
+                   "(adds the wallShearStress + fieldAverage function objects).")
+@click.option("--postprocess-only", "postprocess_only", default=None,
+              type=click.Path(exists=True, file_okay=False),
+              help="Skip meshing/solving; compute biomarkers on an existing solved "
+                   "case directory (re-uses or regenerates the WSS field).")
+def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
+         postprocess, postprocess_only):
     """
     Automated pulsatile CFD for cerebral aneurysms.
 
     Takes the split-patch STL output of VORTEX (wall + capped openings) and
     produces a complete, runnable OpenFOAM case with WSS-resolved boundary layers.
     """
+    # Standalone post-processing of an existing case — no meshing/solving.
+    if postprocess_only:
+        of_env = check_openfoam()
+        click.echo(f"OpenFOAM {of_env['version']} detected at {of_env['root'] or '(sourced)'}")
+        click.echo(f"Post-processing existing case: {postprocess_only}")
+        run_postprocess_only(Path(postprocess_only), of_env, cycles=cycles)
+        return
+
+    # Normal run requires the patient-specific inputs.
+    if stl_dir is None or mean_velocity is None:
+        click.echo("ERROR: --stl-dir and --mean-velocity are required "
+                   "(unless using --postprocess-only).", err=True)
+        sys.exit(1)
+
     # 1. Validate OpenFOAM environment
     of_env = check_openfoam()
     click.echo(f"OpenFOAM {of_env['version']} detected at {of_env['root'] or '(sourced)'}")
@@ -68,8 +90,15 @@ def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir):
         waveform=waveform,
         cores=cores,
         out_dir=out_dir,
+        postprocess=postprocess,
     )
     click.echo(f"Case directory created: {case_dir}")
 
     # 7. Run the pipeline
-    run_pipeline(case_dir=case_dir, of_env=of_env, cores=cores)
+    run_pipeline(
+        case_dir=case_dir,
+        of_env=of_env,
+        cores=cores,
+        cycles=cycles,
+        postprocess_metrics=postprocess,
+    )

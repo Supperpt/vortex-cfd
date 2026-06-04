@@ -35,3 +35,39 @@ timeFormat      general;
 timePrecision   8;
 
 runTimeModifiable yes;
+
+{% if postprocess %}
+// ---------------------------------------------------------------------------
+// Phase C post-processing function objects (added by --postprocess).
+//   wallShearStress writes the KINEMATIC WSS vector (m^2/s^2, i.e. tau/rho)
+//   on the wall patch at every snapshot.  Physical WSS in Pa = rho * value.
+//   fieldAverage1 averages over the LAST cardiac cycle only (timeStart skips
+//   the earlier cycles as transient initialisation) and produces
+//   wallShearStressMean + UMean for ParaView visualisation / cross-checking.
+//   Authoritative TAWSS / OSI are computed in Python from the per-snapshot
+//   wallShearStress fields (see vortex_cfd/postprocess.py).
+// ---------------------------------------------------------------------------
+functions
+{
+    wallShearStress
+    {
+        type            wallShearStress;
+        libs            (fieldFunctionObjects);
+        patches         ({{ wall_patch }});
+        writeControl    writeTime;
+    }
+
+    fieldAverage1
+    {
+        type            fieldAverage;
+        libs            (fieldFunctionObjects);
+        writeControl    writeTime;
+        timeStart       {{ "%.4f"|format(field_average_start) }};   // start of the last cycle
+        fields
+        (
+            wallShearStress { mean on; prime2Mean off; base time; }
+            U               { mean on; prime2Mean off; base time; }
+        );
+    }
+}
+{% endif %}

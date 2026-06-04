@@ -36,7 +36,7 @@ Given a directory of STLs produced by VORTEX with `--split-patches` (one file pe
 4. **Generates a complete OpenFOAM case directory** from Jinja2 templates: `0/`, `constant/`, `system/` with `controlDict`, `fvSchemes`, `fvSolution`, `snappyHexMeshDict`, `decomposeParDict`, `meshQualityDict`, `surfaceFeatureExtractDict`, `blockMeshDict`, plus the labelled STLs placed in `constant/triSurface/`.
 5. **Meshes the lumen** using `snappyHexMesh` with prismatic boundary layers (essential for accurate WSS — first-cell wall-distance must be small enough that the velocity gradient at the wall is resolved, not approximated).
 6. **Runs `pimpleFoam`** — a transient, pressure-implicit, incompressible Navier–Stokes solver — for the requested number of cardiac cycles, with the inlet velocity modulated by the cardiac waveform.
-7. **(Phase C, planned)** Computes WSS, TAWSS, and OSI on the wall over the last cycle, and writes a `metrics_report.json` with summary statistics.
+7. **Computes WSS, TAWSS, and OSI** on the wall over the last cycle (opt-in via `--postprocess`), and writes a `metrics_report.json` with summary statistics. WSS is reported in both kinematic (raw OpenFOAM, m²/s²) and physical (Pa) units; OSI is dimensionless.
 
 The output is a standard OpenFOAM case directory that can also be opened directly in ParaView via the `.foam` placeholder file for visual inspection or further analysis.
 
@@ -118,7 +118,9 @@ These are the deliberate, locked decisions for this pipeline. They are not user-
 
 ## Status
 
-Phase A in progress — repository scaffolding only. No runnable code yet.
+- **Phase A — COMPLETE.** End-to-end STL → runnable OpenFOAM case, validated on a real patient geometry (OpenFOAM v2406, Kubuntu). Velocity field confirmed inside the lumen in ParaView.
+- **Phase C — code-complete, pending real-case validation.** WSS/TAWSS/OSI biomarkers via `--postprocess` / `--postprocess-only`, `metrics_report.json`. ParaView screenshots deferred.
+- **Phase B — planned.** Womersley inlet profile, snappyHexMesh retry logic, structured logging.
 
 ---
 
@@ -152,6 +154,29 @@ Then run the pipeline:
 ```bash
 bash run-cfd.sh --stl-dir <path/to/stls> --cycles 3 --mean-velocity 0.4 --cores 4 --out-dir <output-dir>
 ```
+
+### Hemodynamic biomarkers (WSS / TAWSS / OSI)
+
+Add `--postprocess` to compute the biomarkers automatically at the end of the run. This enables the
+`wallShearStress` + `fieldAverage` OpenFOAM function objects and writes a `metrics_report.json` into the
+case directory:
+
+```bash
+bash run-cfd.sh --stl-dir <path/to/stls> --cycles 3 --mean-velocity 0.4 --cores 4 --postprocess
+```
+
+To compute the biomarkers on a **case that was already solved** (without re-simulating), point
+`--postprocess-only` at its directory. The wall shear stress field is regenerated from the existing
+velocity snapshots via `pimpleFoam -postProcess` if it is not already present:
+
+```bash
+bash run-cfd.sh --postprocess-only <path/to/case_YYYYMMDD_HHMMSS>
+```
+
+`metrics_report.json` contains mean/max TAWSS (in Pa and kinematic), mean/max OSI, the area fraction with
+OSI > 0.3 and TAWSS < 0.4 Pa (the low-and-oscillatory risk zone), the analysed cycle window, and
+validation flags. The `wallShearStress` and `wallShearStressMean` fields are also viewable on the wall
+patch in ParaView.
 
 ---
 

@@ -335,10 +335,19 @@ Cada pasta com um número (ex: `0.01714/`) é um snapshot — o OpenFOAM escreve
 |---|---|---|
 | U (velocidade) | A | Disponível |
 | p (pressão) | A | Disponível |
-| WSS (Wall Shear Stress) | C | Planeado |
-| TAWSS (Time-Averaged WSS) | C | Planeado |
-| OSI (Oscillatory Shear Index) | C | Planeado |
+| WSS (Wall Shear Stress) | C | Disponível (`--postprocess`) |
+| TAWSS (Time-Averaged WSS) | C | Disponível (`--postprocess`) |
+| OSI (Oscillatory Shear Index) | C | Disponível (`--postprocess`) |
+| Relatório JSON com métricas | C | Disponível (`metrics_report.json`) |
+| Screenshots ParaView automáticos | C | Adiado (próximo) |
 | Gradiente de WSS | C | Planeado |
-| Relatório JSON com métricas | C | Planeado |
-| Screenshots ParaView automáticos | C | Planeado |
 | Carreau (viscosidade não-Newtoniana) | D | Planeado |
+
+> **Nota de unidades:** o function object `wallShearStress` do OpenFOAM incompressível devolve o WSS
+> *cinemático* (m²/s², ou seja τ/ρ). O `metrics_report.json` reporta tanto o valor cinemático como o
+> físico em Pa (× ρ = 1060). O OSI é adimensional — o factor ρ cancela.
+>
+> **Como obter:** `run-cfd.sh ... --postprocess` (durante a corrida) ou
+> `run-cfd.sh --postprocess-only <caso>` (sobre um caso já resolvido, sem re-simular). O cálculo de
+> TAWSS/OSI é feito em Python (pyvista) a partir dos snapshots de `wallShearStress` do último ciclo —
+> ver `vortex_cfd/postprocess.py`.

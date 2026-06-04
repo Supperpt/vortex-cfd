@@ -196,6 +196,22 @@ def built_case(scaled_stls_m, tmp_path):
     )
 
 
+@pytest.fixture
+def built_case_pp(scaled_stls_m, tmp_path):
+    """Case built with postprocess=True → controlDict gets the function objects."""
+    wf = load_waveform(None)
+    return build_case(
+        scaled_stls=scaled_stls_m,
+        labels={},
+        cycles=3,
+        mean_velocity=0.4,
+        waveform=wf,
+        cores=2,
+        out_dir=str(tmp_path),
+        postprocess=True,
+    )
+
+
 class TestBuildCase:
     def test_case_directory_created(self, built_case):
         assert built_case.exists()
@@ -265,3 +281,29 @@ class TestBuildCase:
         text = (built_case / "system" / "blockMeshDict").read_text()
         assert "vertices" in text
         assert "blocks" in text
+
+    def test_default_controldict_has_no_function_objects(self, built_case):
+        # postprocess defaults to False → no WSS function objects.
+        text = (built_case / "system" / "controlDict").read_text()
+        assert "wallShearStress" not in text
+        assert "functions" not in text
+
+
+class TestBuildCasePostprocess:
+    def test_controldict_has_wall_shear_stress(self, built_case_pp):
+        text = (built_case_pp / "system" / "controlDict").read_text()
+        assert "functions" in text
+        assert "wallShearStress" in text
+
+    def test_controldict_has_field_average(self, built_case_pp):
+        text = (built_case_pp / "system" / "controlDict").read_text()
+        assert "fieldAverage" in text
+
+    def test_field_average_starts_at_last_cycle(self, built_case_pp):
+        # cycles=3 → averaging starts at 2*T_CYCLE.
+        text = (built_case_pp / "system" / "controlDict").read_text()
+        assert f"{2 * T_CYCLE:.4f}" in text
+
+    def test_wall_shear_stress_targets_wall_patch(self, built_case_pp):
+        text = (built_case_pp / "system" / "controlDict").read_text()
+        assert "patches         (wall)" in text
