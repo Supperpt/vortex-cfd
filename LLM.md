@@ -76,7 +76,7 @@ vortex-cfd/
 ├── LLM.md                         ← this file
 ├── README.md                      ← user-facing documentation
 ├── pyproject.toml                 ← package definition + pytest config
-├── requirements.txt               ← jinja2, numpy, pyvista, click, pytest
+├── requirements.txt               ← jinja2, numpy, scipy, pyvista, click, pytest
 ├── setup.sh                       ← pip install into vortex-aneurysm conda env
 ├── run-cfd.sh                     ← sources OpenFOAM, then runs the CLI
 ├── vortex_cfd/
@@ -112,7 +112,9 @@ vortex-cfd/
     ├── conftest.py                ← pyvista-based synthetic STL fixtures
     ├── test_waveform.py           ← 15 tests
     ├── test_scaling.py            ← 14 tests
-    ├── test_case_builder.py       ← 59 tests
+    ├── test_case_builder.py       ← 67 tests
+    ├── test_postprocess.py        ← 16 tests
+    ├── test_womersley.py          ← 16 tests
     ├── test_env_check.py          ← 11 tests
     └── smoke_test.sh              ← shell-based end-to-end test (Linux only)
 ```
@@ -142,35 +144,23 @@ vortex-cfd/
 
 ---
 
-### Phase B — Robustness and Womersley (COMPLETE — 2026-06-04)
+### Phase B — Robustness and Womersley (COMPLETE — 2026-06-04, pending hardware validation)
 
-**Womersley implementation:**
-- No native Womersley BC in OpenFOAM v2406 (confirmed by source search).
-- `timeVaryingMappedFixedValue` (not `codedFixedValue`): Python writes per-face velocity
-  vectors into `constant/boundaryData/inlet/<t>/U` after snappyHexMesh; OpenFOAM reads them.
-- Math: `scipy.special.jv(0, Λ_k·r/R)`, `Λ_k = i^(3/2)·α_k`, `α_k = R·√(k·ω/ν)`. FFT decomposition.
-  Approach confirmed by [inlet-mapping-toolkit/profiles.py](https://github.com/JieWangnk/inlet-mapping-toolkit/blob/main/inlet_mapper/profiles.py).
-- Default always `flowRateInletVelocity` (parabolic). Womersley opt-in via `--womersley`.
-- scipy added to requirements.txt. New module: `vortex_cfd/womersley.py`.
-- Brief retrograde flow near the wall at diastole is physically correct — NOT clipped.
+**What was built:**
 
+1. **Womersley inlet profile (`--womersley`)** — `timeVaryingMappedFixedValue` (not `codedFixedValue`). Python writes per-face velocity vectors into `constant/boundaryData/inlet/<t>/U` after snappyHexMesh; OpenFOAM reads them. No native Womersley BC exists in v2406. Math: `scipy.special.jv(0, Λ_k·r/R)`, `Λ_k = i^(3/2)·α_k`, `α_k = R·√(k·ω/ν)`. FFT decomposition. Approach confirmed by [inlet-mapping-toolkit/profiles.py](https://github.com/JieWangnk/inlet-mapping-toolkit/blob/main/inlet_mapper/profiles.py). Default always `flowRateInletVelocity` (parabolic). Brief diastolic retrograde flow near the wall is NOT clipped — physically correct.
 
+2. **Physiological validation** — Warns (never aborts) if mean flow rate Q = U_mean × A falls outside 1–10 mL/s (typical ICA range). In `case_builder.py`.
 
-**Goal:** Production-grade inlet physics and hardened meshing.
+3. **snappyHexMesh retry** — `_run_snappy` in `runner.py`: up to 3 attempts; on each failure halves the background cell target, re-renders `blockMeshDict.j2`, re-runs `blockMesh`, then retries SHM.
 
-Planned work items (in priority order):
+4. **Structured logging** — All `print()` calls replaced with `logging.getLogger("vortex_cfd")`. Console handler set up in `__main__.py`. After case dir is created, a `FileHandler` is added writing to `<case_dir>/vortex_cfd.log`.
 
-1. **Womersley inlet profile** — `codedFixedValue` in `0/U` with Fourier decomposition of the waveform and Bessel functions for the radial profile. Required for academic publication. Needs a `--womersley` opt-in flag.
+5. **`--dry-run`** — Build the case directory but skip meshing and solving. In `cli.py`.
 
-2. **Physiological validation** — Before meshing, check that `mean_velocity × inlet_area` gives a plausible cardiac output; warn (not abort) if outside typical ICA range (1–10 mL/s).
+**Not yet validated on real hardware:** `--womersley` flag (requires an actual OpenFOAM meshing + solve run to confirm boundaryData is read correctly and the Womersley M-profile appears in ParaView).
 
-3. **Robust `locationInMesh`** — Current implementation uses the centre of the wall STL bounding box. This fails for highly curved or C-shaped vessels (centre of bbox is outside the lumen). Replace with: read inlet STL face centroids, compute the inlet face normal from area-weighted average, step one inlet-radius inward from the inlet centroid along that normal.
-
-4. **snappyHexMesh retry logic** — If SHM exits non-zero (often due to insufficient background cells or an awkward geometry), automatically retry with a finer background mesh (halve the target cell size) up to 2 retries.
-
-5. **Structured logging** — Replace `print()` calls with Python `logging` module; write a `vortex_cfd.log` inside the case directory.
-
-6. **`--dry-run` flag** — Build the case directory but skip the OpenFOAM solver steps; useful for inspecting the mesh setup without waiting for a simulation.
+**New dependencies:** scipy (added to requirements.txt). New module: `vortex_cfd/womersley.py`.
 
 ---
 
@@ -295,27 +285,19 @@ The PIMPLE algorithm with 2 outer correctors gives a good balance between stabil
 
 ## ⚡ NEXT ACTION (start here)
 
-**Phase C is CODE-COMPLETE (2026-06-04). Validate it on a real solved case.**
+**Phases A, B, and C are all COMPLETE. All code is on the `biomarker_development` branch.**
 
-Implemented on the `biomarker_development` branch: `--postprocess` / `--postprocess-only`, the
-`wallShearStress` + `fieldAverage` function objects, and `postprocess.py` (TAWSS/OSI/metrics_report.json).
-All Phase C unit tests pass (pure numpy, no OpenFOAM needed).
+**Immediate priority — validate `--womersley` on real hardware:**
+```bash
+bash run-cfd.sh --stl-dir test_stls/ --cycles 3 --mean-velocity 0.4 --cores 6 \
+                --womersley --postprocess --out-dir ~/simulations/
+```
+Check: (1) `constant/boundaryData/inlet/` is written after SHM; (2) pimpleFoam starts without errors; (3) ParaView shows a blunter/M-shaped velocity profile at systole compared to the parabolic run.
 
-**Phase B and C are both COMPLETE (2026-06-04).** All 5 Phase B items implemented and tested.
-
-**Phase B summary:**
-- `--womersley`: `timeVaryingMappedFixedValue` with scipy Bessel functions; per-face data written after SHM
-- `--dry-run`: build case, skip solver
-- Physiological flow-rate warning (1–10 mL/s ICA range)
-- SHM retry: up to 3 attempts with halved target cell size
-- Structured logging: `logging.getLogger("vortex_cfd")` + `vortex_cfd.log` file in case dir
-
-**Not yet validated on real hardware:** `--womersley` flag (requires an OpenFOAM run). All unit tests pass.
-
-**Next options:**
-1. Validate `--womersley` on a real patient geometry (run with flag, open in ParaView, check M-shaped systolic profile)
-2. `--screenshots` deferred Phase C item (pvbatch renders of WSS/OSI/TAWSS)
-3. Phase D (Carreau non-Newtonian, k-ω SST turbulence)
+**Next options after that:**
+1. `--screenshots` (deferred Phase C item) — pvbatch renders of WSS/OSI/TAWSS wall maps
+2. Phase D — Carreau non-Newtonian (`--carreau`) or k-ω SST (`--turbulence`)
+3. Merge `biomarker_development` into `main` once `--womersley` is validated
 
 ---
 
