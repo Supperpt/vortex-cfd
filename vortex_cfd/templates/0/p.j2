@@ -13,11 +13,13 @@ internalField   uniform 0;
 
 boundaryField
 {
-    {{ wall_patch }}
+{% for patch in wall_patches %}
+    {{ patch }}
     {
         type            zeroGradient;
     }
 
+{% endfor %}
     {{ inlet_patch }}
     {
         type            zeroGradient;

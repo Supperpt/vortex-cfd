@@ -42,13 +42,15 @@ castellatedMeshControls
 
     refinementSurfaces
     {
-        {{ wall_patch }}
+{% for patch in wall_patches %}
+        {{ patch }}
         {
             // 4 levels → ~0.125 mm cells at the wall from a 2 mm background
             level       (3 4);
             patchInfo   { type wall; inGroups (wall); }
         }
 
+{% endfor %}
         {{ inlet_patch }}
         {
             level       (2 3);
@@ -103,10 +105,12 @@ addLayersControls
 
     layers
     {
-        {{ wall_patch }}
+{% for patch in wall_patches %}
+        {{ patch }}
         {
             nSurfaceLayers  4;
         }
+{% endfor %}
     }
 
     expansionRatio              1.3;

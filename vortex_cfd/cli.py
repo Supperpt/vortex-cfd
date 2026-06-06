@@ -35,8 +35,12 @@ from .runner import run_pipeline, run_postprocess_only
               type=click.Path(exists=True, file_okay=False),
               help="Skip meshing/solving; compute biomarkers on an existing solved "
                    "case directory (re-uses or regenerates the WSS field).")
+@click.option("--legacy-no-aneurysm", "legacy_no_aneurysm", is_flag=True, default=False,
+              help="Use the legacy single-patch wall.stl mode instead of the default "
+                   "two-patch mode (aneurysm_sac + parent_vessel). Required when the "
+                   "VORTEX output does not include aneurysm_sac.stl/parent_vessel.stl.")
 def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
-         postprocess, postprocess_only):
+         postprocess, postprocess_only, legacy_no_aneurysm):
     """
     Automated pulsatile CFD for cerebral aneurysms.
 
@@ -69,7 +73,7 @@ def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
     click.echo(f"Found {len(stl_paths)} STL file(s): {[p.name for p in stl_paths]}")
 
     # 3. Interactive labelling
-    labels = label_patches(stl_paths)
+    labels = label_patches(stl_paths, legacy=legacy_no_aneurysm)
 
     # 4. Scale mm → m if needed and assign canonical names
     scaled_stls = scale_stls(stl_paths, labels)
@@ -91,6 +95,8 @@ def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
         cores=cores,
         out_dir=out_dir,
         postprocess=postprocess,
+        legacy=legacy_no_aneurysm,
+        stl_source_dir=Path(stl_dir),
     )
     click.echo(f"Case directory created: {case_dir}")
 

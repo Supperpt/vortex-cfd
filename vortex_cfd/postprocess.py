@@ -15,6 +15,13 @@ Layout:
 Authoritative TAWSS / OSI come from here, computed from the per-snapshot
 wallShearStress fields over the last cardiac cycle.  The ``fieldAverage``
 function object's ``wallShearStressMean`` is only a ParaView convenience.
+
+New (default) mode: metrics are scoped to the ``aneurysm_sac`` patch.
+  Normalised WSS = mean sac TAWSS / mean parent_vessel TAWSS.
+  Neck inflow rate and sac pressure are parsed from postProcessing/ CSVs.
+
+Legacy mode: metrics are scoped to the single ``wall`` patch as in Phase C.
+  Mode is auto-detected from ``patch_labels.json`` in the case directory.
 """
 
 import json
@@ -234,6 +241,73 @@ def read_wss_series(
     return np.asarray(times, dtype=float), np.asarray(series), areas
 
 
+def _detect_patches(case_dir: Path) -> tuple[str | None, str]:
+    """
+    Read patch_labels.json to detect pipeline mode.
+    Returns (aneurysm_patch, parent_vessel_patch):
+      - New mode: ("aneurysm_sac", "parent_vessel")
+      - Legacy mode: (None, "wall")
+    """
+    labels_path = Path(case_dir) / "patch_labels.json"
+    if labels_path.exists():
+        labels = json.loads(labels_path.read_text())
+        if "aneurysm_sac" in labels:
+            return "aneurysm_sac", "parent_vessel"
+    return None, "wall"
+
+
+def _read_surface_field_value(
+    case_dir: Path,
+    fo_name: str,
+    t_start: float,
+) -> list[tuple[float, float]]:
+    """
+    Parse a surfaceFieldValue postProcessing output file.
+
+    Reads from postProcessing/<fo_name>/<startTime>/surface_fieldValue.dat.
+    Returns [(time, value), ...] for times >= t_start.
+
+    For scalar fields: value is the scalar.
+    For vector fields (3 components after time column): value is the magnitude.
+    Lines beginning with '#' are skipped as comments.
+    """
+    pp_dir = Path(case_dir) / "postProcessing" / fo_name
+    if not pp_dir.exists():
+        return []
+
+    # Use the earliest time directory (matches the simulation startTime).
+    time_dirs = sorted(pp_dir.iterdir())
+    if not time_dirs:
+        return []
+
+    dat_path = time_dirs[0] / "surface_fieldValue.dat"
+    if not dat_path.exists():
+        return []
+
+    rows: list[tuple[float, float]] = []
+    with dat_path.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            try:
+                t = float(parts[0])
+                if t < t_start - 1e-9:
+                    continue
+                if len(parts) == 2:
+                    rows.append((t, float(parts[1])))
+                elif len(parts) == 4:
+                    # Vector: (time, vx, vy, vz) — report magnitude.
+                    vx, vy, vz = float(parts[1]), float(parts[2]), float(parts[3])
+                    rows.append((t, float(np.sqrt(vx**2 + vy**2 + vz**2))))
+            except ValueError:
+                pass
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Orchestration — read + math + report
 # ---------------------------------------------------------------------------
@@ -250,6 +324,11 @@ def compute_metrics(
     Compute TAWSS / OSI over the last cardiac cycle and write
     ``metrics_report.json`` into the case directory.  Returns the report dict.
 
+    Mode is auto-detected from ``patch_labels.json``:
+      - New mode (aneurysm_sac present): metrics scoped to aneurysm_sac patch;
+        also computes parent_vessel mean TAWSS and normalised WSS.
+      - Legacy mode: metrics scoped to the wall patch (Phase C behaviour).
+
     If ``cycles`` is given the last cycle is [(cycles-1)*T, cycles*T].  If it is
     None (standalone post-processing of an old case where the cycle count is
     unknown) the last cycle is derived from the data: the final available
@@ -264,10 +343,19 @@ def compute_metrics(
         t_max = max(available_times(case_dir))
         t_start = max(0.0, t_max - t_cycle)
 
-    print(f"\n[vortex-cfd] Post-processing WSS/TAWSS/OSI over the last cycle "
-          f"(t >= {t_start:.4f}s) ...")
+    aneurysm_patch, parent_vessel_patch = _detect_patches(case_dir)
+    is_new_mode = aneurysm_patch is not None
 
-    times, wss, areas = read_wss_series(case_dir, t_start, wall_patch)
+    if is_new_mode:
+        print(f"\n[vortex-cfd] Post-processing WSS/TAWSS/OSI (aneurysm sac) "
+              f"over the last cycle (t >= {t_start:.4f}s) ...")
+    else:
+        print(f"\n[vortex-cfd] Post-processing WSS/TAWSS/OSI over the last cycle "
+              f"(t >= {t_start:.4f}s) ...")
+
+    # Primary patch: aneurysm_sac in new mode, wall in legacy mode.
+    primary_patch = aneurysm_patch if is_new_mode else wall_patch
+    times, wss, areas = read_wss_series(case_dir, t_start, primary_patch)
     weights = _time_weights(times)
 
     tawss_kin = tawss(wss, weights)
@@ -278,7 +366,7 @@ def compute_metrics(
                         and stats["tawss_pa"]["min"] >= 0.0)
     in_osi_range = bool(0.0 <= stats["osi"]["max"] <= OSI_MAX)
 
-    report = {
+    report: dict = {
         **stats,
         "cycle_analysed": [float(times[0]), float(times[-1])],
         "n_snapshots": int(times.size),
@@ -288,25 +376,103 @@ def compute_metrics(
             "tawss_pa_in_0_50": in_wss_range,
             "osi_in_0_0.5": in_osi_range,
         },
-        "generated": datetime.now().isoformat(timespec="seconds"),
     }
+
+    if is_new_mode:
+        # Rename generic keys to aneurysm-scoped names for clarity.
+        report["aneurysm_tawss_pa"] = report.pop("tawss_pa")
+        report["aneurysm_tawss_kinematic"] = report.pop("tawss_kinematic")
+        report["aneurysm_osi"] = report.pop("osi")
+        report["aneurysm_wall_area_m2"] = report.pop("wall_area_m2")
+        report["aneurysm_n_faces"] = report.pop("n_wall_faces")
+
+        # Parent vessel mean TAWSS (used as normalisation denominator).
+        _, wss_pv, areas_pv = read_wss_series(case_dir, t_start, parent_vessel_patch)
+        w_pv = _time_weights(times)
+        tawss_pv_kin = tawss(wss_pv, w_pv)
+        parent_tawss_pa = float(rho * np.average(tawss_pv_kin,
+                                                   weights=np.asarray(areas_pv)))
+        report["parent_tawss_pa_mean"] = parent_tawss_pa
+
+        sac_tawss_mean = report["aneurysm_tawss_pa"]["mean"]
+        if parent_tawss_pa > 0:
+            report["normalised_wss"] = float(sac_tawss_mean / parent_tawss_pa)
+        else:
+            report["normalised_wss"] = None
+
+        # Sac pressure from surfaceFieldValue postProcessing CSVs.
+        press_mean_rows = _read_surface_field_value(
+            case_dir, "surfaceFieldValue_sac_pressure_mean", t_start)
+        press_max_rows = _read_surface_field_value(
+            case_dir, "surfaceFieldValue_sac_pressure_max", t_start)
+
+        if press_mean_rows:
+            # Kinematic pressure → Pa
+            report["sac_pressure_mean_pa"] = float(
+                rho * np.mean([v for _, v in press_mean_rows]))
+        else:
+            report["sac_pressure_mean_pa"] = None
+
+        if press_max_rows:
+            report["sac_pressure_peak_pa"] = float(
+                rho * max(v for _, v in press_max_rows))
+        else:
+            report["sac_pressure_peak_pa"] = None
+
+        # Neck inflow rate from surfaceFieldValue postProcessing CSVs.
+        flux_rows = _read_surface_field_value(
+            case_dir, "surfaceFieldValue_neck_flux", t_start)
+        peak_vel_rows = _read_surface_field_value(
+            case_dir, "surfaceFieldValue_neck_peak_vel", t_start)
+
+        if flux_rows:
+            vals = [v for _, v in flux_rows]
+            report["neck_mean_flow_rate_m3s"] = float(np.mean(vals))
+            report["neck_peak_flow_rate_m3s"] = float(max(vals))
+        else:
+            report["neck_mean_flow_rate_m3s"] = None
+            report["neck_peak_flow_rate_m3s"] = None
+
+        if peak_vel_rows:
+            report["neck_peak_velocity_ms"] = float(max(v for _, v in peak_vel_rows))
+        else:
+            report["neck_peak_velocity_ms"] = None
+
+    report["generated"] = datetime.now().isoformat(timespec="seconds")
 
     out = case_dir / "metrics_report.json"
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
-    # Human-readable summary
-    print(f"  Wall faces analysed : {stats['n_wall_faces']} "
-          f"({stats['wall_area_m2']*1e6:.1f} mm^2)")
-    print(f"  Snapshots           : {report['n_snapshots']} "
-          f"over [{times[0]:.4f}, {times[-1]:.4f}] s")
-    print(f"  TAWSS (Pa)          : mean {stats['tawss_pa']['mean']:.3f}, "
-          f"max {stats['tawss_pa']['max']:.3f}")
-    print(f"  OSI                 : mean {stats['osi']['mean']:.4f}, "
-          f"max {stats['osi']['max']:.4f}")
-    print(f"  Low-WSS area (<0.4 Pa)   : "
-          f"{stats['area_fraction_tawss_lt_0p4pa']*100:.1f} %")
-    print(f"  High-OSI area (>0.3)     : "
-          f"{stats['area_fraction_osi_gt_0p3']*100:.1f} %")
+    # Human-readable summary.
+    if is_new_mode:
+        at = report["aneurysm_tawss_pa"]
+        ao = report["aneurysm_osi"]
+        print(f"  Aneurysm faces      : {report['aneurysm_n_faces']} "
+              f"({report['aneurysm_wall_area_m2']*1e6:.1f} mm^2)")
+        print(f"  Snapshots           : {report['n_snapshots']} "
+              f"over [{times[0]:.4f}, {times[-1]:.4f}] s")
+        print(f"  TAWSS sac (Pa)      : mean {at['mean']:.3f}, max {at['max']:.3f}")
+        print(f"  OSI sac             : mean {ao['mean']:.4f}, max {ao['max']:.4f}")
+        print(f"  Parent TAWSS (Pa)   : mean {parent_tawss_pa:.3f}")
+        if report["normalised_wss"] is not None:
+            print(f"  Normalised WSS      : {report['normalised_wss']:.3f}")
+        print(f"  Low-WSS area (<0.4 Pa)   : "
+              f"{report['area_fraction_tawss_lt_0p4pa']*100:.1f} %")
+        print(f"  High-OSI area (>0.3)     : "
+              f"{report['area_fraction_osi_gt_0p3']*100:.1f} %")
+    else:
+        print(f"  Wall faces analysed : {stats['n_wall_faces']} "
+              f"({stats['wall_area_m2']*1e6:.1f} mm^2)")
+        print(f"  Snapshots           : {report['n_snapshots']} "
+              f"over [{times[0]:.4f}, {times[-1]:.4f}] s")
+        print(f"  TAWSS (Pa)          : mean {stats['tawss_pa']['mean']:.3f}, "
+              f"max {stats['tawss_pa']['max']:.3f}")
+        print(f"  OSI                 : mean {stats['osi']['mean']:.4f}, "
+              f"max {stats['osi']['max']:.4f}")
+        print(f"  Low-WSS area (<0.4 Pa)   : "
+              f"{stats['area_fraction_tawss_lt_0p4pa']*100:.1f} %")
+        print(f"  High-OSI area (>0.3)     : "
+              f"{stats['area_fraction_osi_gt_0p3']*100:.1f} %")
 
     if not in_wss_range:
         print(f"  WARNING: TAWSS outside the expected 0–{WSS_MAX_PA:.0f} Pa range.")

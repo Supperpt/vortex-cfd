@@ -7,11 +7,16 @@ preserving the suite's "runs without a solver" property.  The I/O layer
 test against a real solved case.
 """
 
+import json
+import textwrap
+
 import numpy as np
 import pytest
 
 from vortex_cfd.postprocess import (
     RHO,
+    _detect_patches,
+    _read_surface_field_value,
     _time_weights,
     osi,
     summary_stats,
@@ -141,3 +146,90 @@ class TestSummaryStats:
         stats = summary_stats(tawss_kin, np.zeros(5), np.full(5, 2.0), rho=RHO)
         assert stats["n_wall_faces"] == 5
         assert stats["wall_area_m2"] == pytest.approx(10.0)
+
+
+# ---------------------------------------------------------------------------
+# _detect_patches — mode detection from patch_labels.json
+# ---------------------------------------------------------------------------
+
+class TestDetectPatches:
+    def test_new_mode_detected_when_aneurysm_sac_present(self, tmp_path):
+        labels = {"aneurysm_sac": "aneurysm_sac", "parent_vessel": "parent_vessel",
+                  "inlet": "inlet", "outlet_0": "outlet"}
+        (tmp_path / "patch_labels.json").write_text(json.dumps(labels))
+        aneurysm_patch, parent_vessel_patch = _detect_patches(tmp_path)
+        assert aneurysm_patch == "aneurysm_sac"
+        assert parent_vessel_patch == "parent_vessel"
+
+    def test_legacy_mode_when_wall_present(self, tmp_path):
+        labels = {"wall": "wall", "inlet": "inlet", "outlet_0": "outlet"}
+        (tmp_path / "patch_labels.json").write_text(json.dumps(labels))
+        aneurysm_patch, parent_vessel_patch = _detect_patches(tmp_path)
+        assert aneurysm_patch is None
+        assert parent_vessel_patch == "wall"
+
+    def test_legacy_mode_when_no_labels_file(self, tmp_path):
+        aneurysm_patch, parent_vessel_patch = _detect_patches(tmp_path)
+        assert aneurysm_patch is None
+        assert parent_vessel_patch == "wall"
+
+
+# ---------------------------------------------------------------------------
+# _read_surface_field_value — CSV parsing
+# ---------------------------------------------------------------------------
+
+class TestReadSurfaceFieldValue:
+    def _make_dat(self, tmp_path, fo_name, content):
+        """Write a surface_fieldValue.dat file inside a fake postProcessing dir."""
+        d = tmp_path / "postProcessing" / fo_name / "0"
+        d.mkdir(parents=True)
+        (d / "surface_fieldValue.dat").write_text(textwrap.dedent(content))
+        return tmp_path
+
+    def test_scalar_field_parsed(self, tmp_path):
+        content = """\
+            # Time  p_areaAverage
+            0.857   1.234e-3
+            0.900   2.345e-3
+        """
+        self._make_dat(tmp_path, "pressure_mean", content)
+        rows = _read_surface_field_value(tmp_path, "pressure_mean", t_start=0.0)
+        assert len(rows) == 2
+        assert rows[0] == pytest.approx((0.857, 1.234e-3))
+        assert rows[1] == pytest.approx((0.900, 2.345e-3))
+
+    def test_vector_field_returns_magnitude(self, tmp_path):
+        # Vector (time, vx, vy, vz) → magnitude sqrt(vx²+vy²+vz²)
+        content = """\
+            # Time  Ux  Uy  Uz
+            0.857   3.0  4.0  0.0
+        """
+        self._make_dat(tmp_path, "neck_flux", content)
+        rows = _read_surface_field_value(tmp_path, "neck_flux", t_start=0.0)
+        assert len(rows) == 1
+        assert rows[0][1] == pytest.approx(5.0)
+
+    def test_comment_lines_skipped(self, tmp_path):
+        content = """\
+            # header line
+            # another comment
+            0.857  1.0
+        """
+        self._make_dat(tmp_path, "fo", content)
+        rows = _read_surface_field_value(tmp_path, "fo", t_start=0.0)
+        assert len(rows) == 1
+
+    def test_t_start_filter(self, tmp_path):
+        content = """\
+            0.500  1.0
+            0.857  2.0
+            1.000  3.0
+        """
+        self._make_dat(tmp_path, "fo", content)
+        rows = _read_surface_field_value(tmp_path, "fo", t_start=0.857)
+        assert len(rows) == 2
+        assert rows[0][0] == pytest.approx(0.857)
+
+    def test_missing_function_object_returns_empty(self, tmp_path):
+        rows = _read_surface_field_value(tmp_path, "nonexistent_fo", t_start=0.0)
+        assert rows == []

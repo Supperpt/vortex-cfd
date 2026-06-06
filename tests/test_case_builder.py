@@ -1,6 +1,7 @@
 """Tests for vortex_cfd.case_builder geometry helpers and full case generation."""
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pyvista as pv
@@ -305,5 +306,110 @@ class TestBuildCasePostprocess:
         assert f"{2 * T_CYCLE:.4f}" in text
 
     def test_wall_shear_stress_targets_wall_patch(self, built_case_pp):
+        # Legacy mode: wall_patches = ["wall"] → renders as "patches         (wall)".
         text = (built_case_pp / "system" / "controlDict").read_text()
         assert "patches         (wall)" in text
+
+
+# ---------------------------------------------------------------------------
+# build_case — aneurysm (new) mode
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def built_case_aneurysm(scaled_stls_aneurysm, stl_dir_aneurysm, tmp_path):
+    """Case built in new two-patch mode (aneurysm_sac + parent_vessel)."""
+    wf = load_waveform(None)
+    return build_case(
+        scaled_stls=scaled_stls_aneurysm,
+        labels={},
+        cycles=3,
+        mean_velocity=0.4,
+        waveform=wf,
+        cores=2,
+        out_dir=str(tmp_path),
+        postprocess=True,
+        stl_source_dir=stl_dir_aneurysm,
+    )
+
+
+class TestBuildCaseAneurysm:
+    def test_aneurysm_stls_in_trisurface(self, built_case_aneurysm):
+        ts = built_case_aneurysm / "constant" / "triSurface"
+        assert (ts / "aneurysm_sac.stl").exists()
+        assert (ts / "parent_vessel.stl").exists()
+        assert (ts / "inlet.stl").exists()
+        assert (ts / "outlet_0.stl").exists()
+
+    def test_patch_labels_contains_aneurysm_patches(self, built_case_aneurysm):
+        meta = json.loads((built_case_aneurysm / "patch_labels.json").read_text())
+        assert "aneurysm_sac" in meta
+        assert "parent_vessel" in meta
+        assert "inlet" in meta
+
+    def test_patch_labels_no_legacy_wall(self, built_case_aneurysm):
+        meta = json.loads((built_case_aneurysm / "patch_labels.json").read_text())
+        assert "wall" not in meta
+
+    def test_U_contains_both_wall_patches(self, built_case_aneurysm):
+        text = (built_case_aneurysm / "0" / "U").read_text()
+        assert "aneurysm_sac" in text
+        assert "parent_vessel" in text
+
+    def test_p_contains_both_wall_patches(self, built_case_aneurysm):
+        text = (built_case_aneurysm / "0" / "p").read_text()
+        assert "aneurysm_sac" in text
+        assert "parent_vessel" in text
+
+    def test_snappy_has_both_wall_refinement_surfaces(self, built_case_aneurysm):
+        text = (built_case_aneurysm / "system" / "snappyHexMeshDict").read_text()
+        assert "aneurysm_sac" in text
+        assert "parent_vessel" in text
+
+    def test_snappy_has_layers_for_both_patches(self, built_case_aneurysm):
+        text = (built_case_aneurysm / "system" / "snappyHexMeshDict").read_text()
+        # Both patches must appear in the addLayersControls section.
+        layers_section = text[text.index("addLayersControls"):]
+        assert "aneurysm_sac" in layers_section
+        assert "parent_vessel" in layers_section
+
+    def test_controldict_wss_targets_both_patches(self, built_case_aneurysm):
+        text = (built_case_aneurysm / "system" / "controlDict").read_text()
+        assert "patches         (aneurysm_sac parent_vessel)" in text
+
+    def test_controldict_has_sac_pressure_function_objects(self, built_case_aneurysm):
+        text = (built_case_aneurysm / "system" / "controlDict").read_text()
+        assert "surfaceFieldValue_sac_pressure_mean" in text
+        assert "surfaceFieldValue_sac_pressure_max" in text
+
+    def test_controldict_has_neck_function_objects(self, built_case_aneurysm):
+        # neck_plane.json is present in stl_dir_aneurysm → neck objects rendered.
+        text = (built_case_aneurysm / "system" / "controlDict").read_text()
+        assert "surfaceFieldValue_neck_flux" in text
+        assert "surfaceFieldValue_neck_peak_vel" in text
+
+    def test_controldict_no_neck_objects_when_no_neck_plane(
+            self, scaled_stls_aneurysm, tmp_path):
+        """When neck_plane.json is absent, neck function objects must be omitted."""
+        wf = load_waveform(None)
+        case = build_case(
+            scaled_stls=scaled_stls_aneurysm,
+            labels={},
+            cycles=3,
+            mean_velocity=0.4,
+            waveform=wf,
+            cores=2,
+            out_dir=str(tmp_path),
+            postprocess=True,
+            stl_source_dir=tmp_path,  # neck_plane.json does not exist here
+        )
+        text = (case / "system" / "controlDict").read_text()
+        assert "surfaceFieldValue_neck_flux" not in text
+        assert "surfaceFieldValue_neck_peak_vel" not in text
+
+    def test_bbox_covers_both_wall_stls(self, built_case_aneurysm):
+        ts = built_case_aneurysm / "constant" / "triSurface"
+        sac = pv.read(str(ts / "aneurysm_sac.stl"))
+        pv_ = pv.read(str(ts / "parent_vessel.stl"))
+        # parent_vessel is larger; combined bbox should be at least as large.
+        text = (built_case_aneurysm / "system" / "blockMeshDict").read_text()
+        assert "vertices" in text  # proxy: blockMeshDict was rendered

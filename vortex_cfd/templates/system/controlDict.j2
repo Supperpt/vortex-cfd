@@ -53,7 +53,7 @@ functions
     {
         type            wallShearStress;
         libs            (fieldFunctionObjects);
-        patches         ({{ wall_patch }});
+        patches         ({{ wall_patches | join(' ') }});
         writeControl    writeTime;
     }
 
@@ -69,5 +69,55 @@ functions
             U               { mean on; prime2Mean off; base time; }
         );
     }
+{% if aneurysm_patch %}
+
+    surfaceFieldValue_sac_pressure_mean
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        surfaceType     patch;
+        patches         ({{ aneurysm_patch }});
+        fields          (p);
+        operation       areaAverage;
+        writeControl    writeTime;
+    }
+
+    surfaceFieldValue_sac_pressure_max
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        surfaceType     patch;
+        patches         ({{ aneurysm_patch }});
+        fields          (p);
+        operation       max;
+        writeControl    writeTime;
+    }
+{% endif %}
+{% if aneurysm_patch and has_neck_plane %}
+
+    surfaceFieldValue_neck_flux
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        surfaceType     plane;
+        basePoint       ( {{ "%.6f"|format(neck_origin[0]) }} {{ "%.6f"|format(neck_origin[1]) }} {{ "%.6f"|format(neck_origin[2]) }} );
+        normalVector    ( {{ "%.6f"|format(neck_normal[0]) }} {{ "%.6f"|format(neck_normal[1]) }} {{ "%.6f"|format(neck_normal[2]) }} );
+        fields          (U);
+        operation       sum;
+        writeControl    writeTime;
+    }
+
+    surfaceFieldValue_neck_peak_vel
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        surfaceType     plane;
+        basePoint       ( {{ "%.6f"|format(neck_origin[0]) }} {{ "%.6f"|format(neck_origin[1]) }} {{ "%.6f"|format(neck_origin[2]) }} );
+        normalVector    ( {{ "%.6f"|format(neck_normal[0]) }} {{ "%.6f"|format(neck_normal[1]) }} {{ "%.6f"|format(neck_normal[2]) }} );
+        fields          (U);
+        operation       max;
+        writeControl    writeTime;
+    }
+{% endif %}
 }
 {% endif %}

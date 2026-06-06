@@ -35,14 +35,25 @@ _TEMPLATE_MAP = {
 # Geometry helpers
 # ---------------------------------------------------------------------------
 
-def _bbox_with_buffer(wall_stl: Path, buffer: float = 0.20) -> dict:
-    mesh = pv.read(str(wall_stl))
-    b = mesh.bounds  # (xmin, xmax, ymin, ymax, zmin, zmax)
-    dx, dy, dz = b[1] - b[0], b[3] - b[2], b[5] - b[4]
+def _bbox_with_buffer(wall_stls: "Path | list[Path]", buffer: float = 0.20) -> dict:
+    """
+    Bounding box of one or more wall STL(s), expanded by `buffer` on each side.
+    Accepts a single Path or a list; a list unions the bboxes of all surfaces.
+    """
+    if isinstance(wall_stls, Path):
+        wall_stls = [wall_stls]
+    bounds = [pv.read(str(p)).bounds for p in wall_stls]
+    xmin = min(b[0] for b in bounds)
+    xmax = max(b[1] for b in bounds)
+    ymin = min(b[2] for b in bounds)
+    ymax = max(b[3] for b in bounds)
+    zmin = min(b[4] for b in bounds)
+    zmax = max(b[5] for b in bounds)
+    dx, dy, dz = xmax - xmin, ymax - ymin, zmax - zmin
     return {
-        "xmin": b[0] - buffer * dx, "xmax": b[1] + buffer * dx,
-        "ymin": b[2] - buffer * dy, "ymax": b[3] + buffer * dy,
-        "zmin": b[4] - buffer * dz, "zmax": b[5] + buffer * dz,
+        "xmin": xmin - buffer * dx, "xmax": xmax + buffer * dx,
+        "ymin": ymin - buffer * dy, "ymax": ymax + buffer * dy,
+        "zmin": zmin - buffer * dz, "zmax": zmax + buffer * dz,
     }
 
 
@@ -115,10 +126,15 @@ def build_case(
     cores: int | None,
     out_dir: str,
     postprocess: bool = False,
+    legacy: bool = False,
+    stl_source_dir: Path | None = None,
 ) -> Path:
     """
     Render all Jinja2 templates and assemble the OpenFOAM case directory.
     Returns the Path to the created directory.
+
+    New mode (default): expects aneurysm_sac + parent_vessel in scaled_stls.
+    Legacy mode (legacy=True or wall key present): uses a single wall patch.
 
     patch_labels.json is written after the directory exists, not before — avoiding
     the race condition that plagued the prior VesselForge_AutoCFD iteration.
@@ -139,10 +155,49 @@ def build_case(
         shutil.copy2(str(src), str(case_dir / "constant" / "triSurface" / f"{canonical}.stl"))
 
     outlet_names = sorted(k for k in scaled_stls if k.startswith("outlet_"))
-    wall_stl = case_dir / "constant" / "triSurface" / "wall.stl"
     inlet_stl = case_dir / "constant" / "triSurface" / "inlet.stl"
 
-    bbox = _bbox_with_buffer(wall_stl)
+    # Detect mode: legacy uses a single "wall" patch; new mode uses two named patches.
+    is_legacy = legacy or ("wall" in scaled_stls)
+
+    if is_legacy:
+        wall_stl = case_dir / "constant" / "triSurface" / "wall.stl"
+        bbox = _bbox_with_buffer(wall_stl)
+        wall_patches = ["wall"]
+        aneurysm_patch = None
+        parent_vessel_patch = "wall"
+        has_neck_plane = False
+        neck_origin: list[float] = [0.0, 0.0, 0.0]
+        neck_normal: list[float] = [0.0, 0.0, 1.0]
+        patch_labels = {"wall": "wall", "inlet": "inlet"}
+    else:
+        sac_stl = case_dir / "constant" / "triSurface" / "aneurysm_sac.stl"
+        pv_stl = case_dir / "constant" / "triSurface" / "parent_vessel.stl"
+        bbox = _bbox_with_buffer([sac_stl, pv_stl])
+        wall_patches = ["aneurysm_sac", "parent_vessel"]
+        aneurysm_patch = "aneurysm_sac"
+        parent_vessel_patch = "parent_vessel"
+
+        # Load neck_plane.json — skip neck function objects if absent.
+        neck_plane_path = (stl_source_dir / "neck_plane.json") if stl_source_dir else None
+        if neck_plane_path and neck_plane_path.exists():
+            data = json.loads(neck_plane_path.read_text())
+            neck_origin = list(data["origin"])
+            neck_normal = list(data["normal"])
+            has_neck_plane = True
+        else:
+            if neck_plane_path:
+                print(f"WARNING: neck_plane.json not found at {neck_plane_path}. "
+                      "Neck-plane function objects will be skipped.")
+            neck_origin = [0.0, 0.0, 0.0]
+            neck_normal = [0.0, 0.0, 1.0]
+            has_neck_plane = False
+
+        patch_labels = {"aneurysm_sac": "aneurysm_sac", "parent_vessel": "parent_vessel",
+                        "inlet": "inlet"}
+
+    patch_labels.update({n: "outlet" for n in outlet_names})
+
     cell_counts = _background_cell_counts(bbox)
     loc = _location_in_mesh(inlet_stl)
     area = _inlet_area(inlet_stl)
@@ -155,25 +210,30 @@ def build_case(
     field_average_start = (cycles - 1) * T_CYCLE
 
     ctx = {
-        "wall_patch":      "wall",
-        "inlet_patch":     "inlet",
-        "outlet_patches":  outlet_names,
-        "all_stls":        list(scaled_stls.keys()),
-        "waveform_table":  table,
-        "t_cycle":         T_CYCLE,
-        "end_time":        end_time,
-        "write_interval":  write_interval,
-        "max_co":          0.8,
-        "cores":           cores,
-        "nu":              3.3e-6,
-        "rho":             1060.0,
-        "bbox":            bbox,
-        "nx":              cell_counts["nx"],
-        "ny":              cell_counts["ny"],
-        "nz":              cell_counts["nz"],
-        "location_in_mesh": loc,
-        "case_name":       case_name,
-        "postprocess":     postprocess,
+        "wall_patches":        wall_patches,
+        "aneurysm_patch":      aneurysm_patch,
+        "parent_vessel_patch": parent_vessel_patch,
+        "has_neck_plane":      has_neck_plane,
+        "neck_origin":         neck_origin,
+        "neck_normal":         neck_normal,
+        "inlet_patch":         "inlet",
+        "outlet_patches":      outlet_names,
+        "all_stls":            list(scaled_stls.keys()),
+        "waveform_table":      table,
+        "t_cycle":             T_CYCLE,
+        "end_time":            end_time,
+        "write_interval":      write_interval,
+        "max_co":              0.8,
+        "cores":               cores,
+        "nu":                  3.3e-6,
+        "rho":                 1060.0,
+        "bbox":                bbox,
+        "nx":                  cell_counts["nx"],
+        "ny":                  cell_counts["ny"],
+        "nz":                  cell_counts["nz"],
+        "location_in_mesh":    loc,
+        "case_name":           case_name,
+        "postprocess":         postprocess,
         "field_average_start": field_average_start,
     }
 
@@ -193,8 +253,6 @@ def build_case(
     allrun.chmod(allrun.stat().st_mode | 0o111)
 
     # Metadata — written after the directory exists (lesson from prior iteration)
-    patch_labels = {"wall": "wall", "inlet": "inlet"}
-    patch_labels.update({n: "outlet" for n in outlet_names})
     (case_dir / "patch_labels.json").write_text(
         json.dumps(patch_labels, indent=2), encoding="utf-8"
     )

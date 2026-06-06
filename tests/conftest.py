@@ -1,5 +1,7 @@
 """Shared pytest fixtures — synthetic STL geometry, no real patient data needed."""
 
+import json
+
 import numpy as np
 import pytest
 import pyvista as pv
@@ -37,7 +39,7 @@ def _disc_stl(path, radius, center=(0.0, 0.0, 0.0)):
 
 
 # ---------------------------------------------------------------------------
-# Metre-scale fixture set (no scaling should be applied)
+# Metre-scale fixture set (no scaling should be applied) — legacy mode
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
@@ -83,7 +85,7 @@ def scaled_stls_m(stl_paths_m, labels_m):
 
 
 # ---------------------------------------------------------------------------
-# Millimetre-scale fixture set (scaling MUST be applied)
+# Millimetre-scale fixture set (scaling MUST be applied) — legacy mode
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
@@ -117,3 +119,52 @@ def labels_mm(stl_paths_mm):
         else:
             d[p] = "outlet"
     return d
+
+
+# ---------------------------------------------------------------------------
+# Two-patch (aneurysm) fixture set — new mode
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def stl_dir_aneurysm(tmp_path):
+    """
+    Temporary directory with aneurysm_sac + parent_vessel + inlet + outlet_0 STLs
+    in metres, plus a neck_plane.json.  Represents the new VORTEX output format.
+    """
+    d = tmp_path / "aneurysm_stls"
+    d.mkdir()
+    _sphere_stl(d / "aneurysm_sac_surface.stl", radius=0.004)
+    _sphere_stl(d / "parent_vessel_surface.stl", radius=0.008)
+    _disc_stl(d / "cap_00.stl", radius=0.003, center=(0.0, 0.0, 0.0))
+    _disc_stl(d / "cap_01.stl", radius=0.0025, center=(0.005, 0.0, 0.0))
+    neck_plane = {"origin": [0.0, 0.0, 0.003], "normal": [0.0, 0.0, 1.0]}
+    (d / "neck_plane.json").write_text(json.dumps(neck_plane))
+    return d
+
+
+@pytest.fixture
+def stl_paths_aneurysm(stl_dir_aneurysm):
+    return sorted(stl_dir_aneurysm.glob("*.stl"))
+
+
+@pytest.fixture
+def labels_aneurysm(stl_paths_aneurysm):
+    """Map each path to the new-mode label."""
+    d = {}
+    for p in stl_paths_aneurysm:
+        if "aneurysm_sac" in p.name:
+            d[p] = "aneurysm_sac"
+        elif "parent_vessel" in p.name:
+            d[p] = "parent_vessel"
+        elif "00" in p.name:
+            d[p] = "inlet"
+        else:
+            d[p] = "outlet"
+    return d
+
+
+@pytest.fixture
+def scaled_stls_aneurysm(stl_paths_aneurysm, labels_aneurysm):
+    """Output of scale_stls for the two-patch aneurysm set."""
+    from vortex_cfd.scaling import scale_stls
+    return scale_stls(stl_paths_aneurysm, labels_aneurysm)

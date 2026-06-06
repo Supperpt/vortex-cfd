@@ -183,6 +183,28 @@ Work items:
 
 ---
 
+### Phase C2 — Aneurysm-Scoped Biomarkers (IMPLEMENTED 2026-06-06, pending real-case validation)
+
+**Goal:** Scope all hemodynamic metrics to the aneurysm sac only, not the whole vessel wall.  Adds normalised WSS, neck inflow rate, and sac pressure metrics.
+
+**Prerequisite:** VORTEX must produce `aneurysm_sac.stl`, `parent_vessel.stl`, and `neck_plane.json` alongside the inlet/outlet caps.  See `VMTK_plan_biomarkers.md` for the VORTEX side.
+
+**What was built:**
+- `patch_labeller.py` — new mode accepts `aneurysm_sac` / `parent_vessel` / `inlet` / `outlet` labels (exactly 1 sac + 1 vessel + 1 inlet + ≥1 outlet).  Legacy `--legacy-no-aneurysm` mode still supported.
+- `cli.py` — `--legacy-no-aneurysm` flag selects the old single-patch path.
+- `case_builder.py` — detects mode from `scaled_stls` keys; loads `neck_plane.json`; builds new Jinja2 context variables (`wall_patches`, `aneurysm_patch`, `parent_vessel_patch`, `has_neck_plane`, `neck_origin`, `neck_normal`); `_bbox_with_buffer()` now accepts a list of wall STLs.
+- `snappyHexMeshDict.j2` — `refinementSurfaces` and `addLayersControls.layers` now loop over `wall_patches`, giving 4-layer BL treatment to both sac and parent vessel.
+- `0/U.j2`, `0/p.j2` — loop over `wall_patches` for noSlip / zeroGradient BCs.
+- `controlDict.j2` — `wallShearStress` patches cover all wall patches; new `surfaceFieldValue_sac_pressure_mean/max` function objects; neck-plane function objects (`surfaceFieldValue_neck_flux`, `surfaceFieldValue_neck_peak_vel`) added when `has_neck_plane=True`.
+- `postprocess.py` — auto-detects mode from `patch_labels.json`; in new mode computes TAWSS/OSI on `aneurysm_sac`, parent mean TAWSS, normalised WSS, and parses postProcessing CSVs for sac pressure and neck flow rate; `metrics_report.json` gets new keys (`aneurysm_tawss_pa`, `aneurysm_osi`, `normalised_wss`, `parent_tawss_pa_mean`, `sac_pressure_mean_pa`, `sac_pressure_peak_pa`, `neck_mean_flow_rate_m3s`, `neck_peak_flow_rate_m3s`, `neck_peak_velocity_ms`).
+
+**Deferred from this phase:**
+- **WSSG** (Wall Shear Stress Gradient) and **KEL** (Kinetic Energy Loss) require surface spatial gradients and volumetric flux integration that have no native OpenFOAM function object.  Both are to be implemented as a `pvbatch` Python script as described in `vortexcfd_biomarkers_plan.md` §6, gated by a `--pvbatch` flag.  Steps per the plan:
+  - WSSG: `aneurysm_sac` block → "Gradient Of Unstructured Dataset" on `wallShearStress` → `mag(gradient)` → Temporal Statistics.
+  - KEL: slice at neck plane → `0.5 × ρ × |U|² × (U·n̂)` calculator → Integrate Variables → cycle-averaged scalar.
+
+---
+
 ### Phase D — Extensions (PLANNED)
 
 1. **Carreau non-Newtonian viscosity** — Cho & Kensey (1991): μ₀ = 0.056, μ∞ = 0.0035 Pa·s, λ = 3.313 s, n = 0.3568. Opt-in via `--carreau` flag. Requires modifying `transportProperties.j2` and adding `CarreauYasuda` model.
@@ -280,18 +302,19 @@ The PIMPLE algorithm with 2 outer correctors gives a good balance between stabil
 
 ## ⚡ NEXT ACTION (start here)
 
-**Phase C is CODE-COMPLETE (2026-06-04). Validate it on a real solved case.**
+**Phase C2 is CODE-COMPLETE (2026-06-06). Validate on a real case with new VORTEX output.**
 
-Implemented on the `biomarker_development` branch: `--postprocess` / `--postprocess-only`, the
-`wallShearStress` + `fieldAverage` function objects, and `postprocess.py` (TAWSS/OSI/metrics_report.json).
-All Phase C unit tests pass (pure numpy, no OpenFOAM needed).
+Branch: `aneurysm_dome_biomarkers`.  All new unit tests pass (pure numpy + pyvista fixture, no OpenFOAM needed).
 
-**Phase C is COMPLETE and validated (2026-06-04).** Full run on real patient geometry confirmed correct
-WSS fields in ParaView and physiologically plausible `metrics_report.json` (TAWSS mean 9.83 Pa, OSI mean 0.019).
+Validation checklist:
+1. Confirm VORTEX produces `aneurysm_sac.stl`, `parent_vessel.stl`, `neck_plane.json` in the STL output directory.
+2. Run: `bash run-cfd.sh --stl-dir <new-vortex-output> --cycles 3 --mean-velocity 0.4 --cores 6 --postprocess`
+3. Check `metrics_report.json` for `aneurysm_tawss_pa`, `normalised_wss`, `sac_pressure_mean_pa`.
+4. Open case in ParaView; verify `aneurysm_sac` and `parent_vessel` are separate patches with WSS coloured on each.
 
-**Next: Phase B — Womersley inlet profile (item 1).**
+**Deferred — WSSG + KEL (pvbatch).** See Phase C2 notes and `vortexcfd_biomarkers_plan.md` §6.
 
-Deferred Phase C item: `--screenshots` (pvbatch renders of WSS/OSI/TAWSS). Add after Phase B if needed for paper figures.
+**After validation:** Phase B (Womersley inlet profile) or pvbatch WSSG/KEL script, whichever is more urgent for the paper.
 
 ---
 
@@ -304,3 +327,4 @@ Deferred Phase C item: `--screenshots` (pvbatch renders of WSS/OSI/TAWSS). Add a
 | 2026-05-29 | Phase A validation (partial): pytest confirmed 99/99 pass on Linux in vortex-aneurysm env. Fixed smoke_test.sh (OUT_DIR/STL_DIR/REPO_ROOT not exported — Python subprocess couldn't read them via os.environ). Smoke test PASSED with real VMTK STLs. OpenFOAM v2406 confirmed at standard path. Full mesher+solver run not yet executed. |
 | 2026-05-30 | Phase A fully validated on Kubuntu desktop (Ryzen 5 5600X, OpenFOAM v2406). Fixed 6 bugs during first real run (see Section 5). Key fixes: run-cfd.sh conda/venv detection, `-m vortex_cfd` entry point, background patch in 0/U and 0/p, div(nuEff) in fvSchemes, snappyHexMesh serial-only workaround for v2406 segfault, locationInMesh replaced with inlet-centroid method. Velocity field confirmed inside vessel lumen in ParaView. **Phase A COMPLETE.** |
 | 2026-06-04 | Phase C implemented and fully validated on a real patient geometry (OpenFOAM v2406, 6 cores, 3 cycles). `metrics_report.json`: TAWSS mean 9.83 Pa, OSI mean 0.019, low-WSS area 0.17%, high-OSI area 0.84% — all clinically plausible. `wallShearStress` confirmed visible in ParaView with correct pulsatile temporal behaviour. Also fixed `run-cfd.sh` conda env detection (base env / space-in-path bugs). **Phase C COMPLETE.** |
+| 2026-06-06 | Phase C2 implemented (branch `aneurysm_dome_biomarkers`): two-patch wall mode (aneurysm_sac + parent_vessel), `--legacy-no-aneurysm` fallback flag, neck-plane function objects, normalised WSS, sac pressure metrics, neck flow rate. 8 source files + 3 test files updated. New unit tests (pure numpy/pyvista, no OpenFOAM). Pending real-case validation with updated VORTEX output. WSSG + KEL deferred to pvbatch script (see `vortexcfd_biomarkers_plan.md` §6). |

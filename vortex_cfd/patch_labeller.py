@@ -6,7 +6,11 @@ from pathlib import Path
 import click
 import pyvista as pv
 
-VALID_LABELS = ("wall", "inlet", "outlet")
+# Legacy mode: single wall patch.
+VALID_LABELS_LEGACY = ("wall", "inlet", "outlet")
+
+# New (default) mode: aneurysm sac + parent vessel as separate wall patches.
+VALID_LABELS_NEW = ("aneurysm_sac", "parent_vessel", "inlet", "outlet")
 
 
 def _describe(path: Path) -> str:
@@ -25,17 +29,33 @@ def _describe(path: Path) -> str:
         return "  (could not read geometry)"
 
 
-def label_patches(stl_paths: list[Path]) -> dict[Path, str]:
+def label_patches(stl_paths: list[Path], legacy: bool = False) -> dict[Path, str]:
     """
-    Prompt the user to assign wall / inlet / outlet to each STL.
-    Validates that the result has exactly one wall and one inlet.
+    Prompt the user to assign a label to each STL.
+
+    New mode (default): labels are aneurysm_sac / parent_vessel / inlet / outlet.
+      Validates: exactly 1 aneurysm_sac + 1 parent_vessel + 1 inlet + ≥1 outlet.
+
+    Legacy mode (--legacy-no-aneurysm): labels are wall / inlet / outlet.
+      Validates: exactly 1 wall + 1 inlet + ≥1 outlet.
+
     Returns a {Path: label} dict.
     """
-    click.echo(
-        "\n--- Patch labelling ---\n"
-        "Each file below is either the vessel wall surface or a capped opening.\n"
-        "VMTK numbers caps geometrically; only you know which opening is the inlet.\n"
-    )
+    valid_labels = VALID_LABELS_LEGACY if legacy else VALID_LABELS_NEW
+
+    if legacy:
+        click.echo(
+            "\n--- Patch labelling (legacy mode) ---\n"
+            "Each file below is either the vessel wall surface or a capped opening.\n"
+            "VMTK numbers caps geometrically; only you know which opening is the inlet.\n"
+        )
+    else:
+        click.echo(
+            "\n--- Patch labelling ---\n"
+            "Each file below is the aneurysm sac surface, the parent vessel surface,\n"
+            "or a capped opening (inlet or outlet).\n"
+            "Labels: aneurysm_sac / parent_vessel / inlet / outlet\n"
+        )
 
     labels: dict[Path, str] = {}
     for path in stl_paths:
@@ -43,18 +63,28 @@ def label_patches(stl_paths: list[Path]) -> dict[Path, str]:
         click.echo(_describe(path))
         label = click.prompt(
             "  Label",
-            type=click.Choice(VALID_LABELS, case_sensitive=False),
+            type=click.Choice(valid_labels, case_sensitive=False),
         ).lower()
         labels[path] = label
         click.echo()
 
-    walls = [p for p, l in labels.items() if l == "wall"]
+    errors: list[str] = []
+
+    if legacy:
+        walls = [p for p, l in labels.items() if l == "wall"]
+        if len(walls) != 1:
+            errors.append(f"Expected exactly 1 wall, got {len(walls)}: {[p.name for p in walls]}")
+    else:
+        sacs = [p for p, l in labels.items() if l == "aneurysm_sac"]
+        vessels = [p for p, l in labels.items() if l == "parent_vessel"]
+        if len(sacs) != 1:
+            errors.append(f"Expected exactly 1 aneurysm_sac, got {len(sacs)}: {[p.name for p in sacs]}")
+        if len(vessels) != 1:
+            errors.append(f"Expected exactly 1 parent_vessel, got {len(vessels)}: {[p.name for p in vessels]}")
+
     inlets = [p for p, l in labels.items() if l == "inlet"]
     outlets = [p for p, l in labels.items() if l == "outlet"]
 
-    errors: list[str] = []
-    if len(walls) != 1:
-        errors.append(f"Expected exactly 1 wall, got {len(walls)}: {[p.name for p in walls]}")
     if len(inlets) != 1:
         errors.append(f"Expected exactly 1 inlet, got {len(inlets)}: {[p.name for p in inlets]}")
     if not outlets:
@@ -65,9 +95,21 @@ def label_patches(stl_paths: list[Path]) -> dict[Path, str]:
             click.echo(f"ERROR: {e}", err=True)
         sys.exit(1)
 
-    click.echo(
-        f"Labels confirmed — wall: {walls[0].name}  "
-        f"inlet: {inlets[0].name}  "
-        f"outlets: {[p.name for p in outlets]}"
-    )
+    if legacy:
+        walls = [p for p, l in labels.items() if l == "wall"]
+        click.echo(
+            f"Labels confirmed — wall: {walls[0].name}  "
+            f"inlet: {inlets[0].name}  "
+            f"outlets: {[p.name for p in outlets]}"
+        )
+    else:
+        sacs = [p for p, l in labels.items() if l == "aneurysm_sac"]
+        vessels = [p for p, l in labels.items() if l == "parent_vessel"]
+        click.echo(
+            f"Labels confirmed — aneurysm_sac: {sacs[0].name}  "
+            f"parent_vessel: {vessels[0].name}  "
+            f"inlet: {inlets[0].name}  "
+            f"outlets: {[p.name for p in outlets]}"
+        )
+
     return labels
