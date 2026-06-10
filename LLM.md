@@ -183,7 +183,7 @@ Work items:
 
 ---
 
-### Phase C2 — Aneurysm-Scoped Biomarkers (IMPLEMENTED 2026-06-06, pending real-case validation)
+### Phase C2 — Aneurysm-Scoped Biomarkers (VALIDATED 2026-06-10 — pipeline runs end-to-end on real VORTEX output)
 
 **Goal:** Scope all hemodynamic metrics to the aneurysm sac only, not the whole vessel wall.  Adds normalised WSS, neck inflow rate, and sac pressure metrics.
 
@@ -263,6 +263,26 @@ Work items:
 
 ---
 
+### BUG-007 — Phase C2 `surfaceFieldValue` function objects use invalid ESI v2406 syntax
+- **Discovered:** 2026-06-10, first real run of the Phase C2 two-patch pipeline (OpenFOAM v2406, 6 cores)
+- **Symptom:** `pimpleFoam` aborted on startup: `Entry 'writeFields' not found in dictionary ".../surfaceFieldValue_sac_pressure_mean"`
+- **Root cause:** The `surfaceFieldValue` blocks in `controlDict.j2` were written with keys that ESI v2406 does not accept: `surfaceType`/`patches` (correct: `regionType`/`name`), no `writeFields` entry (mandatory), and a non-existent `surfaceType plane; basePoint; normalVector` form for the neck plane. These blocks are new in Phase C2 and had never reached the solver before — Phase C (2026-06-04) only emitted `wallShearStress` + `fieldAverage`, and the Phase C2 unit tests only assert that the template renders the FO *names*, not that OpenFOAM accepts the dict syntax.
+- **Fix:** Rewrote the FOs against the installed v2406 caseDicts/source:
+  - Patch FOs: `regionType patch; name <patch>; writeFields false;`
+  - Neck FOs: `regionType sampledSurface; name ...; sampledSurfaceDict { type plane; planeType pointAndNormal; pointAndNormalDict { point; normal; } source cells; interpolate true; }`
+  - Neck flux operation `sum` (meaningless on U) → `areaNormalIntegrate` (true volumetric flow rate ∫U·n dA).
+- **Status:** FIXED
+
+### BUG-008 — Phase C2 post-process parser read the wrong `.dat` filename
+- **Discovered:** 2026-06-10, alongside BUG-007 (found by reading the v2406 `writeFile`/`fieldValue` source)
+- **Symptom:** Would have silently returned no rows (sac pressure / neck metrics → `None`) even on a successful solve.
+- **Root cause:** `postprocess.py:_read_surface_field_value` read `surface_fieldValue.dat`; ESI names the file after the FO `typeName`, i.e. `surfaceFieldValue.dat`.
+- **Fix:** Corrected the filename in `postprocess.py` and the test fixture in `tests/test_postprocess.py`.
+- **Status:** FIXED
+
+### Note — Python 3.9 compatibility (2026-06-10)
+The shared `vortex-aneurysm` conda env is pinned to Python 3.9 (vtk/VMTK dependency constraints block an in-place upgrade to 3.12). The code used 3.10+ `X | Y` union type hints, so the env could not import it (`run-cfd.sh` failed at `import click`). Added `from __future__ import annotations` to all `vortex_cfd/*.py` modules and set `requires-python = ">=3.9"`. vortex-cfd does **not** depend on VMTK — it only reads VORTEX's STL output — so the two tools can live in separate envs if a future Python bump is wanted.
+
 ## 6. Design decisions log
 
 Records non-obvious choices so future sessions don't re-litigate them.
@@ -302,19 +322,18 @@ The PIMPLE algorithm with 2 outer correctors gives a good balance between stabil
 
 ## ⚡ NEXT ACTION (start here)
 
-**Phase C2 is CODE-COMPLETE (2026-06-06). Validate on a real case with new VORTEX output.**
+**Phase C2 ran end-to-end on real VORTEX output (2026-06-10, OpenFOAM v2406, 6 cores).** The solver completed after fixing the `surfaceFieldValue` function-object syntax (BUG-007) and the post-process parser filename (BUG-008). Branch: `aneurysm_dome_biomarkers`.
 
-Branch: `aneurysm_dome_biomarkers`.  All new unit tests pass (pure numpy + pyvista fixture, no OpenFOAM needed).
+VORTEX now emits: `aneurysm.stl` (→ aneurysm_sac), `wall.stl` (→ parent_vessel), `inlet.stl`, `outlet1.stl`, `outlet2.stl`, `output_neck_plane.json` (origin in mm — case_builder scales it ×0.001). `sac_bulge_heatmap.ply` is ignored (CLI globs `*.stl` only).
 
-Validation checklist:
-1. Confirm VORTEX produces `aneurysm_sac.stl`, `parent_vessel.stl`, `neck_plane.json` in the STL output directory.
-2. Run: `bash run-cfd.sh --stl-dir <new-vortex-output> --cycles 3 --mean-velocity 0.4 --cores 6 --postprocess`
-3. Check `metrics_report.json` for `aneurysm_tawss_pa`, `normalised_wss`, `sac_pressure_mean_pa`.
-4. Open case in ParaView; verify `aneurysm_sac` and `parent_vessel` are separate patches with WSS coloured on each.
+**Remaining confirmation before declaring Phase C2 fully COMPLETE:**
+1. Open `metrics_report.json` and sanity-check the new keys: `aneurysm_tawss_pa`, `aneurysm_osi`, `normalised_wss`, `parent_tawss_pa_mean`, `sac_pressure_mean_pa`/`peak`, `neck_mean_flow_rate_m3s`/`peak`, `neck_peak_velocity_ms`. Confirm none are unexpectedly `None` and values fall in the validation ranges (WSS 0–50 Pa, OSI 0–0.5).
+2. Open the case in ParaView: verify `aneurysm_sac` and `parent_vessel` are separate patches with `wallShearStress` coloured on each; eyeball the neck-plane cut location.
+3. **Known caveat:** `neck_peak_velocity_ms` uses `max` on U (component-wise) → the parser takes the magnitude, slightly overestimating true peak speed. Acceptable for now; revisit if a precise value is needed.
 
 **Deferred — WSSG + KEL (pvbatch).** See Phase C2 notes and `vortexcfd_biomarkers_plan.md` §6.
 
-**After validation:** Phase B (Womersley inlet profile) or pvbatch WSSG/KEL script, whichever is more urgent for the paper.
+**After confirmation:** Phase B (Womersley inlet profile) or the pvbatch WSSG/KEL script, whichever is more urgent for the paper.
 
 ---
 
@@ -328,3 +347,4 @@ Validation checklist:
 | 2026-05-30 | Phase A fully validated on Kubuntu desktop (Ryzen 5 5600X, OpenFOAM v2406). Fixed 6 bugs during first real run (see Section 5). Key fixes: run-cfd.sh conda/venv detection, `-m vortex_cfd` entry point, background patch in 0/U and 0/p, div(nuEff) in fvSchemes, snappyHexMesh serial-only workaround for v2406 segfault, locationInMesh replaced with inlet-centroid method. Velocity field confirmed inside vessel lumen in ParaView. **Phase A COMPLETE.** |
 | 2026-06-04 | Phase C implemented and fully validated on a real patient geometry (OpenFOAM v2406, 6 cores, 3 cycles). `metrics_report.json`: TAWSS mean 9.83 Pa, OSI mean 0.019, low-WSS area 0.17%, high-OSI area 0.84% — all clinically plausible. `wallShearStress` confirmed visible in ParaView with correct pulsatile temporal behaviour. Also fixed `run-cfd.sh` conda env detection (base env / space-in-path bugs). **Phase C COMPLETE.** |
 | 2026-06-06 | Phase C2 implemented (branch `aneurysm_dome_biomarkers`): two-patch wall mode (aneurysm_sac + parent_vessel), `--legacy-no-aneurysm` fallback flag, neck-plane function objects, normalised WSS, sac pressure metrics, neck flow rate. 8 source files + 3 test files updated. New unit tests (pure numpy/pyvista, no OpenFOAM). Pending real-case validation with updated VORTEX output. WSSG + KEL deferred to pvbatch script (see `vortexcfd_biomarkers_plan.md` §6). |
+| 2026-06-10 | Phase C2 first real run on updated VORTEX output. Fixed BUG-007 (`surfaceFieldValue` FOs used invalid ESI v2406 syntax — `surfaceType`/`patches`/missing `writeFields`/bad plane form — verified correct keys against installed v2406 caseDicts + source; neck flux `sum`→`areaNormalIntegrate`) and BUG-008 (parser read `surface_fieldValue.dat`, actual is `surfaceFieldValue.dat`). Also: `case_builder` now accepts `output_neck_plane.json` and scales the neck origin mm→m; added `from __future__ import annotations` across modules for Python 3.9 (vortex-aneurysm conda env); `requires-python >=3.9`. Pipeline ran to completion through the solver. Test suite 139/140 (the 1 failure is the pre-existing pyvista `locationInMesh` fixture artefact). Remaining: eyeball `metrics_report.json` values + ParaView patches. |

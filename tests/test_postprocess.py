@@ -180,10 +180,10 @@ class TestDetectPatches:
 
 class TestReadSurfaceFieldValue:
     def _make_dat(self, tmp_path, fo_name, content):
-        """Write a surface_fieldValue.dat file inside a fake postProcessing dir."""
+        """Write a surfaceFieldValue.dat file inside a fake postProcessing dir."""
         d = tmp_path / "postProcessing" / fo_name / "0"
         d.mkdir(parents=True)
-        (d / "surface_fieldValue.dat").write_text(textwrap.dedent(content))
+        (d / "surfaceFieldValue.dat").write_text(textwrap.dedent(content))
         return tmp_path
 
     def test_scalar_field_parsed(self, tmp_path):

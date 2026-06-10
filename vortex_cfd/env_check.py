@@ -1,4 +1,5 @@
 """Detect and validate an active OpenFOAM ESI (openfoam.com) environment."""
+from __future__ import annotations
 
 import os
 import shutil

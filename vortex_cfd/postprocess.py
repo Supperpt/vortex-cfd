@@ -23,6 +23,7 @@ New (default) mode: metrics are scoped to the ``aneurysm_sac`` patch.
 Legacy mode: metrics are scoped to the single ``wall`` patch as in Phase C.
   Mode is auto-detected from ``patch_labels.json`` in the case directory.
 """
+from __future__ import annotations
 
 import json
 from datetime import datetime
@@ -264,7 +265,7 @@ def _read_surface_field_value(
     """
     Parse a surfaceFieldValue postProcessing output file.
 
-    Reads from postProcessing/<fo_name>/<startTime>/surface_fieldValue.dat.
+    Reads from postProcessing/<fo_name>/<startTime>/surfaceFieldValue.dat.
     Returns [(time, value), ...] for times >= t_start.
 
     For scalar fields: value is the scalar.
@@ -280,7 +281,7 @@ def _read_surface_field_value(
     if not time_dirs:
         return []
 
-    dat_path = time_dirs[0] / "surface_fieldValue.dat"
+    dat_path = time_dirs[0] / "surfaceFieldValue.dat"
     if not dat_path.exists():
         return []
 

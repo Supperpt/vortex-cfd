@@ -71,14 +71,17 @@ functions
     }
 {% if aneurysm_patch %}
 
+    // Sac pressure on the aneurysm wall patch.  p is KINEMATIC (m^2/s^2);
+    // physical Pa = rho * value (applied in postprocess.py).
     surfaceFieldValue_sac_pressure_mean
     {
         type            surfaceFieldValue;
         libs            (fieldFunctionObjects);
-        surfaceType     patch;
-        patches         ({{ aneurysm_patch }});
+        regionType      patch;
+        name            {{ aneurysm_patch }};
         fields          (p);
         operation       areaAverage;
+        writeFields     false;
         writeControl    writeTime;
     }
 
@@ -86,24 +89,40 @@ functions
     {
         type            surfaceFieldValue;
         libs            (fieldFunctionObjects);
-        surfaceType     patch;
-        patches         ({{ aneurysm_patch }});
+        regionType      patch;
+        name            {{ aneurysm_patch }};
         fields          (p);
         operation       max;
+        writeFields     false;
         writeControl    writeTime;
     }
 {% endif %}
 {% if aneurysm_patch and has_neck_plane %}
 
+    // Volumetric flow rate through the neck plane (integral of U.n over the
+    // cutting plane, m^3/s).  areaNormalIntegrate writes the result in the
+    // first component of a vector.
     surfaceFieldValue_neck_flux
     {
         type            surfaceFieldValue;
         libs            (fieldFunctionObjects);
-        surfaceType     plane;
-        basePoint       ( {{ "%.6f"|format(neck_origin[0]) }} {{ "%.6f"|format(neck_origin[1]) }} {{ "%.6f"|format(neck_origin[2]) }} );
-        normalVector    ( {{ "%.6f"|format(neck_normal[0]) }} {{ "%.6f"|format(neck_normal[1]) }} {{ "%.6f"|format(neck_normal[2]) }} );
+        regionType      sampledSurface;
+        name            neckPlaneFlux;
+        sampledSurfaceDict
+        {
+            type            plane;
+            planeType       pointAndNormal;
+            pointAndNormalDict
+            {
+                point   ( {{ "%.6f"|format(neck_origin[0]) }} {{ "%.6f"|format(neck_origin[1]) }} {{ "%.6f"|format(neck_origin[2]) }} );
+                normal  ( {{ "%.6f"|format(neck_normal[0]) }} {{ "%.6f"|format(neck_normal[1]) }} {{ "%.6f"|format(neck_normal[2]) }} );
+            }
+            source          cells;
+            interpolate     true;
+        }
         fields          (U);
-        operation       sum;
+        operation       areaNormalIntegrate;
+        writeFields     false;
         writeControl    writeTime;
     }
 
@@ -111,11 +130,23 @@ functions
     {
         type            surfaceFieldValue;
         libs            (fieldFunctionObjects);
-        surfaceType     plane;
-        basePoint       ( {{ "%.6f"|format(neck_origin[0]) }} {{ "%.6f"|format(neck_origin[1]) }} {{ "%.6f"|format(neck_origin[2]) }} );
-        normalVector    ( {{ "%.6f"|format(neck_normal[0]) }} {{ "%.6f"|format(neck_normal[1]) }} {{ "%.6f"|format(neck_normal[2]) }} );
+        regionType      sampledSurface;
+        name            neckPlaneVel;
+        sampledSurfaceDict
+        {
+            type            plane;
+            planeType       pointAndNormal;
+            pointAndNormalDict
+            {
+                point   ( {{ "%.6f"|format(neck_origin[0]) }} {{ "%.6f"|format(neck_origin[1]) }} {{ "%.6f"|format(neck_origin[2]) }} );
+                normal  ( {{ "%.6f"|format(neck_normal[0]) }} {{ "%.6f"|format(neck_normal[1]) }} {{ "%.6f"|format(neck_normal[2]) }} );
+            }
+            source          cells;
+            interpolate     true;
+        }
         fields          (U);
         operation       max;
+        writeFields     false;
         writeControl    writeTime;
     }
 {% endif %}

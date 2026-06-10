@@ -1,4 +1,5 @@
 """Build the OpenFOAM case directory from scaled STLs and simulation parameters."""
+from __future__ import annotations
 
 import json
 import multiprocessing
@@ -11,6 +12,7 @@ import pyvista as pv
 from jinja2 import Environment, FileSystemLoader
 
 from .waveform import T_CYCLE
+from .scaling import _any_in_mm
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -178,16 +180,26 @@ def build_case(
         aneurysm_patch = "aneurysm_sac"
         parent_vessel_patch = "parent_vessel"
 
-        # Load neck_plane.json — skip neck function objects if absent.
-        neck_plane_path = (stl_source_dir / "neck_plane.json") if stl_source_dir else None
-        if neck_plane_path and neck_plane_path.exists():
+        # Load neck_plane.json (or output_neck_plane.json) — skip if absent.
+        neck_plane_path = None
+        if stl_source_dir:
+            for candidate in ("neck_plane.json", "output_neck_plane.json"):
+                p = stl_source_dir / candidate
+                if p.exists():
+                    neck_plane_path = p
+                    break
+        if neck_plane_path:
             data = json.loads(neck_plane_path.read_text())
             neck_origin = list(data["origin"])
             neck_normal = list(data["normal"])
+            # Scale origin mm→m if the source STLs are in millimetres.
+            src_stls = list(stl_source_dir.glob("*.stl"))
+            if src_stls and _any_in_mm(src_stls):
+                neck_origin = [v * 0.001 for v in neck_origin]
             has_neck_plane = True
         else:
-            if neck_plane_path:
-                print(f"WARNING: neck_plane.json not found at {neck_plane_path}. "
+            if stl_source_dir:
+                print(f"WARNING: neck_plane.json not found in {stl_source_dir}. "
                       "Neck-plane function objects will be skipped.")
             neck_origin = [0.0, 0.0, 0.0]
             neck_normal = [0.0, 0.0, 1.0]

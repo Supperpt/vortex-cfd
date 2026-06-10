@@ -1,4 +1,5 @@
 """Orchestrate the full OpenFOAM meshing and solving pipeline."""
+from __future__ import annotations
 
 import multiprocessing
 import os

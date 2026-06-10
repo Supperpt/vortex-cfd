@@ -1,4 +1,5 @@
 """Detect millimetre geometry and scale all STLs to metres (SI)."""
+from __future__ import annotations
 
 import tempfile
 from pathlib import Path
