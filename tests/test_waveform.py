@@ -32,20 +32,28 @@ class TestDefaultWaveform:
         assert np.mean(wf[:, 1]) == pytest.approx(1.0, rel=1e-6)
 
     def test_flow_all_positive(self):
-        # ICA flow should be antegrade throughout the cycle (clipped to > 0)
+        # ICA flow should be antegrade throughout the cycle
         wf = load_waveform(None)
         assert np.all(wf[:, 1] > 0)
 
-    def test_systolic_peak_near_30_percent(self):
+    def test_systolic_peak_in_early_systole(self):
+        # Ford et al. (2005) ICA archetype: systolic peak P1 at 106 ms into an
+        # 885 ms cycle => t_norm ~= 0.12 (early systole, not mid-cycle).
         wf = load_waveform(None)
         peak_t = wf[np.argmax(wf[:, 1]), 0]
-        assert 0.20 <= peak_t <= 0.45, (
-            f"Systolic peak at t_norm={peak_t:.2f} — expected in [0.20, 0.45]"
+        assert 0.08 <= peak_t <= 0.18, (
+            f"Systolic peak at t_norm={peak_t:.2f} — expected early systole [0.08, 0.18]"
         )
 
-    def test_systolic_peak_exceeds_mean(self):
+    def test_systolic_peak_amplitude_matches_ford(self):
+        # Ford Table 2 ICA P1 amplitude = 1.66 x mean.
         wf = load_waveform(None)
-        assert np.max(wf[:, 1]) > 1.5, "Systolic peak should be well above the mean"
+        assert np.max(wf[:, 1]) == pytest.approx(1.66, abs=0.05)
+
+    def test_end_diastolic_minimum_matches_ford(self):
+        # Ford Table 2 ICA M0 (global minimum) = 0.68 x mean.
+        wf = load_waveform(None)
+        assert np.min(wf[:, 1]) == pytest.approx(0.68, abs=0.05)
 
 
 class TestCSVWaveform:

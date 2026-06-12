@@ -16,6 +16,9 @@ dependencies = [
 [project.scripts]
 vortex-cfd = "vortex_cfd.cli:main"
 
+[tool.setuptools.package-data]
+vortex_cfd = ["templates/**/*", "data/*.csv"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts  = "-v --tb=short"

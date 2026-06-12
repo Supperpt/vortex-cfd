@@ -51,7 +51,7 @@ The user provides three things (one optional):
 | `--stl-dir <dir>` | Directory containing the wall + cap STLs from VORTEX |
 | `--cycles <N>` | Number of cardiac cycles to simulate (typical: 3 — the first is discarded as transient, the last is analysed) |
 | `--mean-velocity <m/s>` | Average blood velocity at the inlet over a cardiac cycle (typical for ICA: 0.3–0.5 m/s; can come from a 4D-flow MRI measurement or literature) |
-| `--waveform <csv>` *(opt.)* | Two-column CSV (`time_normalised`, `flow_normalised`) defining the pulse shape. Default: a Womersley-like analytical shape with systolic peak at ~30% of the cycle |
+| `--waveform <csv>` *(opt.)* | Two-column CSV (`time_normalised`, `flow_normalised`) overriding the pulse shape. Default: the literature-standard **Ford et al. (2005)** internal-carotid-artery archetypal waveform (early-systolic peak ≈1.66× mean at ~12% of the cycle), normalised to mean=1 and scaled by `--mean-velocity` |
 | `--cores <N>` | CPU cores for parallel meshing and solving (default: all available) |
 
 Everything else — fluid density, viscosity, turbulence model, time-stepping strategy, mesh refinement levels, solver tolerances — is fixed by the *Numerical choices* below.

@@ -9,39 +9,18 @@ import numpy as np
 T_CYCLE = 0.857   # seconds — 70 bpm
 N_POINTS = 100    # samples per cycle in the flow-rate table
 
+# Built-in default inlet waveform: the Ford et al. (2005) archetypal internal
+# carotid artery (ICA) volumetric flow-rate shape, normalised to cycle mean = 1.
+# Digitised from Table 2 of the paper — see data/generate_ica_ford2005.py for
+# provenance and regeneration.
+DEFAULT_WAVEFORM_CSV = Path(__file__).parent / "data" / "ica_ford2005.csv"
 
-def _default_shape(t_norm: np.ndarray) -> np.ndarray:
+
+def _read_waveform_csv(csv_path) -> tuple[np.ndarray, np.ndarray]:
     """
-    Normalised analytical ICA waveform (mean = 1, systolic peak at ~30 % of cycle).
-    Built from 3 Fourier harmonics tuned to match the typical internal-carotid shape.
-    Negative excursions (brief retrograde flow) are clipped to 2 % of the mean,
-    then the array is renormalised so its mean is exactly 1.0.
+    Parse a 2-column (t_normalised, flow_normalised) CSV.
+    Lines starting with '#' and blank lines are ignored; unparseable rows skipped.
     """
-    w = 2 * np.pi
-    shape = (
-        1.0
-        + 1.2 * np.cos(w * t_norm - 1.6)
-        + 0.20 * np.cos(2 * w * t_norm - 0.7)
-        + 0.10 * np.cos(3 * w * t_norm - 0.3)
-    )
-    shape = np.maximum(shape, 0.02)
-    return shape / np.mean(shape)
-
-
-def load_waveform(csv_path: str | None) -> np.ndarray:
-    """
-    Return an (N, 2) array of (t_normalised, flow_normalised) for one cycle.
-    flow_normalised has mean = 1 over the interval.
-
-    If csv_path is None the built-in analytical shape is used.
-    The CSV must have two columns: time_normalised (0–1) and flow_normalised.
-    Lines starting with '#' and blank lines are ignored.
-    """
-    t_norm = np.linspace(0, 1, N_POINTS, endpoint=False)
-
-    if csv_path is None:
-        return np.column_stack([t_norm, _default_shape(t_norm)])
-
     rows: list[tuple[float, float]] = []
     with open(csv_path, newline="") as fh:
         for row in csv.reader(fh):
@@ -57,5 +36,21 @@ def load_waveform(csv_path: str | None) -> np.ndarray:
 
     t_arr = np.array([r[0] for r in rows])
     q_arr = np.array([r[1] for r in rows])
+    return t_arr, q_arr
+
+
+def load_waveform(csv_path: str | None) -> np.ndarray:
+    """
+    Return an (N, 2) array of (t_normalised, flow_normalised) for one cycle.
+    flow_normalised has mean = 1 over the interval.
+
+    If csv_path is None the built-in Ford et al. (2005) ICA waveform is used
+    (bundled at data/ica_ford2005.csv). A user CSV must have two columns:
+    time_normalised (0–1) and flow_normalised. Lines starting with '#' and blank
+    lines are ignored. Either way the flow column is renormalised to mean = 1, so
+    the magnitude is set solely by --mean-velocity downstream.
+    """
+    path = DEFAULT_WAVEFORM_CSV if csv_path is None else csv_path
+    t_arr, q_arr = _read_waveform_csv(path)
     q_arr = q_arr / np.mean(q_arr)
     return np.column_stack([t_arr, q_arr])

@@ -14,23 +14,7 @@
       "Bash(pip3 show *)",
       "Read(//usr/lib/openfoam/**)",
       "Read(//opt/**)",
-      "Read(//home/diogovluz/miniconda3/envs/**)",
-      "Bash(/home/diogovluz/miniconda3/envs/vortex-aneurysm/bin/python --version)",
-      "Bash(/home/diogovluz/miniconda3/envs/vortex-aneurysm/bin/python -c \"import pytest; print\\('pytest ok'\\)\")",
-      "Bash(/home/diogovluz/miniconda3/envs/vortex-aneurysm/bin/python -c \"import vortex_cfd; print\\('vortex_cfd ok'\\)\")",
-      "Bash(/home/diogovluz/miniconda3/envs/vortex-aneurysm/bin/pip install *)",
-      "Bash(/home/diogovluz/miniconda3/envs/vortex-aneurysm/bin/python -m pytest -q --tb=short)",
-      "Bash(/home/diogovluz/miniconda3/envs/vortex-aneurysm/bin/python -m pytest -q --tb=long tests/test_case_builder.py)",
-      "Bash(/home/diogovluz/miniconda3/envs/vortex-aneurysm/bin/python *)",
-      "Bash(conda search *)",
-      "Bash(conda install *)",
-      "Bash(python3.10 --version)",
-      "Bash(python3.11 --version)",
-      "Bash(python3.12 --version)",
-      "Bash(python3.12 *)",
-      "Bash(/home/diogovluz/.local/bin/pip3.12 install *)",
-      "Bash(PYTHONPATH=/home/diogovluz/Documents/vortex-cfd python3.12 -m pytest -q --tb=short tests/)",
-      "Bash(PYTHONPATH=. python3.12 -m pytest -q --tb=short)"
+      "Bash(python -m pytest tests/test_waveform.py tests/test_case_builder.py -q)"
     ]
   }
 }

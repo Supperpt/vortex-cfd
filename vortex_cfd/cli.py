@@ -19,10 +19,11 @@ from .runner import run_pipeline, run_postprocess_only
 @click.option("--cycles",        type=int, default=3, show_default=True,
               help="Number of cardiac cycles to simulate (first discarded, last analysed).")
 @click.option("--mean-velocity", default=None, type=float,
-              help="Time-averaged inlet velocity in m/s (typical ICA: 0.3–0.5).")
+              help="Cycle-averaged (mean) inlet velocity in m/s (typical ICA: 0.3–0.5).")
 @click.option("--waveform",      "waveform_csv", default=None,
               type=click.Path(exists=True, dir_okay=False),
-              help="Optional 2-column CSV (time_norm, flow_norm) for the pulse shape.")
+              help="Optional 2-column CSV (time_norm, flow_norm) overriding the pulse "
+                   "shape. Default: built-in Ford et al. (2005) ICA waveform.")
 @click.option("--cores",         default=None, type=int,
               help="CPU cores for parallel meshing/solving (default: all available).")
 @click.option("--out-dir",       default=".", show_default=True,
@@ -83,7 +84,7 @@ def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
     if waveform_csv:
         click.echo(f"Using user waveform: {waveform_csv}")
     else:
-        click.echo("Using built-in analytical ICA waveform.")
+        click.echo("Using built-in Ford et al. (2005) ICA waveform.")
 
     # 6. Build OpenFOAM case directory
     case_dir = build_case(
