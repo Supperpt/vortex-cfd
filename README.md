@@ -31,7 +31,19 @@ DICOM (Angio-CT)  ──[VORTEX]──►  Watertight STL  ──[vortex-cfd]─
 Given a directory of STLs produced by VORTEX with `--split-patches` (one file per surface — the lumen wall and each capped opening), the program:
 
 1. **Detects and sources the OpenFOAM environment** (target: ESI **v2512** from openfoam.com; accepts v2406/v2412/v2506/v2512).
-2. **Interactively asks the user to label each STL** as `wall`, `inlet`, or `outlet`. VORTEX's caps are numbered geometrically by VMTK and carry no semantic information — the user is the only entity who knows which opening of the model corresponds to the parent artery (the inlet) and which are distal branches (the outlets). The labelling is a 30-second step done once per patient.
+2. **Labels each STL.** If every file in the directory follows the default naming scheme (see below), labels are assigned automatically with no prompting — this is what enables unattended batch runs. Otherwise the program falls back to **interactively asking the user to label each STL**: VORTEX's caps are numbered geometrically by VMTK and carry no semantic information, so a human identifies which opening is the parent artery (the inlet) and which are distal branches (the outlets). The labelling is a 30-second step done once per patient.
+
+   **Default naming scheme** (filenames, case-insensitive; auto-labelled when *all* files match):
+
+   | Filename | Role (default mode) | Role (`--legacy-no-aneurysm`) |
+   |---|---|---|
+   | `aneurysm.stl` | aneurysm sac | — |
+   | `wall.stl` | parent vessel | wall |
+   | `inlet.stl` | inlet | inlet |
+   | `outlet_1.stl`, `outlet_2.stl`, … | outlet | outlet |
+   | `neck_plane.json` (optional) | neck plane for inflow/peak-velocity metrics | — |
+
+   If any STL is unrecognised or the counts are wrong (e.g. no inlet), the program prompts for **all** files rather than guessing.
 3. **Scales the geometry from millimetres to metres.** Medical imaging works in mm; OpenFOAM assumes SI metres. Failing to scale gives results that look plausible but are off by 10⁹ in velocity — a class of bug already learned the hard way in a prior iteration of this work.
 4. **Generates a complete OpenFOAM case directory** from Jinja2 templates: `0/`, `constant/`, `system/` with `controlDict`, `fvSchemes`, `fvSolution`, `snappyHexMeshDict`, `decomposeParDict`, `meshQualityDict`, `surfaceFeatureExtractDict`, `blockMeshDict`, plus the labelled STLs placed in `constant/triSurface/`.
 5. **Meshes the lumen** using `snappyHexMesh` with prismatic boundary layers (essential for accurate WSS — first-cell wall-distance must be small enough that the velocity gradient at the wall is resolved, not approximated).

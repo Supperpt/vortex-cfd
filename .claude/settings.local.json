@@ -14,7 +14,8 @@
       "Bash(pip3 show *)",
       "Read(//usr/lib/openfoam/**)",
       "Read(//opt/**)",
-      "Bash(python -m pytest tests/test_waveform.py tests/test_case_builder.py -q)"
+      "Bash(python -m pytest tests/test_waveform.py tests/test_case_builder.py -q)",
+      "Bash(git fetch *)"
     ]
   }
 }
