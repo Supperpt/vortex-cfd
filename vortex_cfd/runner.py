@@ -6,9 +6,43 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from . import postprocess
+
+
+# Path to the current run's markdown log, or None when logging is off.
+# Set by _log_init() at the start of a pipeline; appended to by _run() and
+# _check_mesh_quality() as the run proceeds (written incrementally so the log
+# survives a mid-run abort).
+_RUN_LOG: "Path | None" = None
+
+
+def _log_init(case_dir: Path, pipeline: str) -> None:
+    """Start a fresh run_log.md in the case directory."""
+    global _RUN_LOG
+    _RUN_LOG = Path(case_dir) / "run_log.md"
+    try:
+        _RUN_LOG.write_text(
+            f"# vortex-cfd run log\n\n"
+            f"- **Case:** `{case_dir}`\n"
+            f"- **Started:** {datetime.now().isoformat(timespec='seconds')}\n"
+            f"- **Pipeline:** {pipeline}\n"
+        )
+    except OSError:
+        _RUN_LOG = None  # never let logging break a run
+
+
+def _log_append(markdown: str) -> None:
+    """Append a markdown fragment to the run log, if logging is active."""
+    if _RUN_LOG is None:
+        return
+    try:
+        with _RUN_LOG.open("a") as f:
+            f.write(markdown)
+    except OSError:
+        pass
 
 
 def _build_env(of_env: dict) -> dict | None:
@@ -30,6 +64,12 @@ def _run(cmd: str, cwd: Path, env: dict | None, label: str) -> str:
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     print(proc.stdout, end="")
+    status = "OK" if proc.returncode == 0 else f"FAILED (exit {proc.returncode})"
+    _log_append(
+        f"\n## {label} — {status}\n\n"
+        f"```sh\n{cmd}\n```\n\n"
+        f"```\n{proc.stdout.rstrip()}\n```\n"
+    )
     if proc.returncode != 0:
         print(
             f"\nERROR: '{label}' exited with code {proc.returncode}.",
@@ -77,9 +117,12 @@ def _check_mesh_quality(output: str) -> None:
             "\nMesh quality check FAILED. Inspect the mesh in ParaView before proceeding.",
             file=sys.stderr,
         )
+        _log_append("\n## Mesh quality gate — FAILED\n\n"
+                    "Aborted before solving (see checkMesh output above).\n")
         sys.exit(1)
 
     print("[vortex-cfd] Mesh quality check PASSED.")
+    _log_append("\n## Mesh quality gate — PASSED\n")
 
 
 def run_pipeline(
@@ -112,6 +155,9 @@ def run_pipeline(
     parallel = cores > 1
     mpi = f"mpirun -np {cores} " if parallel else ""
 
+    _log_init(case_dir, f"full pipeline (cores={cores}, cycles={cycles}, "
+                        f"postprocess={postprocess_metrics})")
+
     _run("surfaceFeatureExtract",           case_dir, env, "surfaceFeatureExtract")
     _run("blockMesh",                        case_dir, env, "blockMesh")
 
@@ -136,10 +182,13 @@ def run_pipeline(
 
     if postprocess_metrics:
         postprocess.compute_metrics(case_dir, cycles=cycles)
+        _log_append("\n## Post-processing — metrics_report.json written\n")
 
+    _log_append(f"\n## Pipeline complete — {datetime.now().isoformat(timespec='seconds')}\n")
     print(f"\n[vortex-cfd] Pipeline complete.")
     print(f"  Case : {case_dir}")
     print(f"  Open : {case_dir / (case_dir.name + '.foam')} in ParaView")
+    print(f"  Log  : {case_dir / 'run_log.md'}")
 
 
 def generate_wss_fields(case_dir: Path, of_env: dict) -> None:
@@ -163,6 +212,7 @@ def run_postprocess_only(case_dir: Path, of_env: dict, cycles: int | None = None
     then computes and writes metrics_report.json.
     """
     case_dir = Path(case_dir)
+    _log_init(case_dir, "post-process only")
 
     # Has wallShearStress already been written into any snapshot?
     has_wss = any(case_dir.glob("[0-9]*/wallShearStress"))

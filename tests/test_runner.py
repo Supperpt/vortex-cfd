@@ -1,6 +1,7 @@
 """Tests for the checkMesh quality gate (pure string parsing, no OpenFOAM)."""
 import pytest
 
+import vortex_cfd.runner as runner
 from vortex_cfd.runner import _check_mesh_quality
 
 
@@ -41,3 +42,22 @@ def test_nonortho_over_70_aborts():
 def test_old_skewness_threshold_no_longer_aborts():
     # 6.66 used to trip the old maxSkewness>4 gate (BUG-009); must pass now.
     _check_mesh_quality(_checkmesh_output(69.96, 6.66))  # no SystemExit
+
+
+# --- run_log.md (run-step logging) ------------------------------------------
+
+def test_log_append_is_noop_without_init(tmp_path, monkeypatch):
+    # When no log is initialised, _log_append must do nothing (and not raise).
+    monkeypatch.setattr(runner, "_RUN_LOG", None)
+    runner._log_append("## should not be written\n")  # no error, nothing created
+    assert not list(tmp_path.iterdir())
+
+
+def test_log_init_and_append_write_markdown(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "_RUN_LOG", None)
+    runner._log_init(tmp_path, "full pipeline")
+    runner._log_append("\n## blockMesh — OK\n\n```\nmesh stats...\n```\n")
+    text = (tmp_path / "run_log.md").read_text()
+    assert "# vortex-cfd run log" in text
+    assert "full pipeline" in text
+    assert "## blockMesh — OK" in text

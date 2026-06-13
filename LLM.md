@@ -187,7 +187,15 @@ Work items:
 
 ---
 
-### Phase C2 — Aneurysm-Scoped Biomarkers (IMPLEMENTED 2026-06-06, pending real-case validation)
+### Phase C2 — Aneurysm-Scoped Biomarkers (COMPLETE 2026-06-13)
+
+**Validated on two real patients** (AA_010, AA_004; 0.30 m/s ICA inlet, 3 cycles, 6 cores). The WSS/OSI biomarkers are trustworthy and physiologically plausible:
+- Aneurysm TAWSS mean 3.1 / 3.8 Pa, parent TAWSS mean 6.0 / 6.9 Pa, normalised WSS 0.52 / 0.56 (sac < parent, as expected).
+- Aneurysm OSI mean 0.023 / 0.008 (max < 0.39); low-WSS area 0% / 8%. Validation flags (TAWSS in 0–50, OSI in 0–0.5) pass. Last cycle analysed, 50 snapshots, full 3 cycles run.
+
+**The neck inflow / peak-velocity metrics are NOT trustworthy yet** — three issues found during validation, deferred to **Phase C3** (see below). Sac pressure (≈4–14 mmHg gauge) is plausible but exceeds the old 0–200 Pa note (that note is too conservative; pressure is not in the enforced validation flags).
+
+(Original implementation notes below, IMPLEMENTED 2026-06-06.)
 
 **Goal:** Scope all hemodynamic metrics to the aneurysm sac only, not the whole vessel wall.  Adds normalised WSS, neck inflow rate, and sac pressure metrics.
 
@@ -206,6 +214,20 @@ Work items:
 - **WSSG** (Wall Shear Stress Gradient) and **KEL** (Kinetic Energy Loss) require surface spatial gradients and volumetric flux integration that have no native OpenFOAM function object.  Both are to be implemented as a `pvbatch` Python script as described in `vortexcfd_biomarkers_plan.md` §6, gated by a `--pvbatch` flag.  Steps per the plan:
   - WSSG: `aneurysm_sac` block → "Gradient Of Unstructured Dataset" on `wallShearStress` → `mag(gradient)` → Temporal Statistics.
   - KEL: slice at neck plane → `0.5 × ρ × |U|² × (U·n̂)` calculator → Integrate Variables → cycle-averaged scalar.
+
+---
+
+### Phase C3 — Fix neck metrics + diagnostics (PLANNED, opened 2026-06-13)
+
+Found during C2 validation of AA_010/AA_004. The neck inflow/peak-velocity metrics are buggy or mis-scoped and must not be reported until fixed. See BUG-010/011/012.
+
+1. **Fix `neck_peak_velocity_ms` parser (BUG-010).** `postprocess._read_surface_field_value` splits the FO line on whitespace and does `float(parts[1])` on a *parenthesised* vector token `(vx vy vz)` → `ValueError` → all rows dropped → metric is `null` in both cases. Strip the `(`/`)` (and handle the `vx vy vz)` tail) before parsing. **Also** the FO operation is `max(U)` (component-wise vector max), which is not the peak *speed* — change the neck-vel FO in `controlDict.j2` to `operation maxMag` (or compute |U| max) so the parsed scalar is the true peak speed.
+
+2. **Fix `neck_peak_flow_rate_m3s` sign (BUG-011).** `postprocess.py:432` uses `float(max(vals))` on the signed flux series. When the neck-plane normal points "outward" the flux is negative all cycle, so `max()` returns the *least-negative* value (smaller magnitude than the mean → impossible peak; AA_010: peak −1.33e-6 < mean −1.95e-6). Use peak-by-magnitude: `max(vals, key=abs)` (and likewise report `neck_mean_flow_rate` consistently, e.g. mean of |flux| or signed mean with documented convention).
+
+3. **Verify neck-plane extent / KEL scoping (CAVEAT-013).** The neck FO is an *infinite* `sampledSurface` plane, so `areaNormalIntegrate(U)` integrates over the whole vessel cross-section it cuts, not just the aneurysm-neck orifice. Evidence: neck mean flux (~1.9–2.5e-6 m³/s) ≈ ICA parent throughput (v·A ≈ 2.7e-6). As labelled, "neck inflow rate" likely measures parent-vessel flow, and a true sac neck has ~0 net cyclic flux. Confirm the plane location in ParaView; if it cuts the parent vessel, clip the sampled surface to the neck region (needed before KEL too). This blocks the deferred KEL biomarker.
+
+(Then resume the **WSSG + KEL pvbatch** work deferred from C2 — see `vortexcfd_biomarkers_plan.md` §6.)
 
 ---
 
@@ -290,6 +312,28 @@ Work items:
 - **Also fixed (found while patching the gate):** the non-orthogonality regex `r"Max non-orthogonality\s*=\s*..."` never matched checkMesh's actual output (`Mesh non-orthogonality Max: 69.96 average: ...`), so the 70° gate had *silently never fired* — a mesh with non-ortho 85 would have passed. Corrected to `r"non-orthogonality Max:\s*([\d.]+)"`. Regression-tested in `tests/test_runner.py`.
 - **Status:** FIXED
 
+### BUG-010 — `neck_peak_velocity_ms` always null (vector parser) — DEFERRED to C3
+- **Discovered:** 2026-06-13, C2 validation of AA_010/AA_004 (both report `null`).
+- **Symptom:** `neck_peak_velocity_ms` is `null` in every report.
+- **Root cause:** the `neck_peak_vel` FO writes a parenthesised vector per line, `<t>\t(vx vy vz)`. `postprocess._read_surface_field_value` does `line.split()` → `parts = ['<t>', '(vx', 'vy', 'vz)']`, then `float('(vx')` raises `ValueError`, which the `except ValueError: pass` swallows → every row dropped → empty series → `None`. Confirmed by reproduction. Secondary: the FO operation `max(U)` is component-wise (a vector), not the peak speed; should be `maxMag`.
+- **Fix (planned, C3):** strip `()` in the parser; change the neck-vel FO to `operation maxMag` in `controlDict.j2`.
+- **Status:** OPEN (Phase C3)
+
+### BUG-011 — `neck_peak_flow_rate_m3s` uses sign-naive max — DEFERRED to C3
+- **Discovered:** 2026-06-13, C2 validation. AA_010 reports peak (−1.33e-6) smaller in magnitude than the mean (−1.95e-6) — impossible for a true peak.
+- **Root cause:** `postprocess.py` computes `float(max(vals))` on the *signed* flux series. For an outward-pointing neck normal the flux is negative all cycle, so `max()` returns the least-negative (smallest-magnitude) value. AA_004 was correct only by luck (positive flux).
+- **Fix (planned, C3):** peak-by-magnitude (`max(vals, key=abs)`); document the mean-flux sign convention.
+- **Status:** OPEN (Phase C3)
+
+### CAVEAT-012 — neck flux likely integrates the whole vessel cross-section — VERIFY in C3
+- **Discovered:** 2026-06-13, C2 validation. Neck mean flux (~1.9–2.5e-6 m³/s) ≈ ICA parent throughput (v·A ≈ 0.30 × ~9e-6 ≈ 2.7e-6), not a small sac-neck inflow (which should net ~0 over a cycle).
+- **Root cause (suspected):** the neck FO uses an *infinite* `sampledSurface` plane; `areaNormalIntegrate(U)` sums over the entire plane∩fluid intersection, which extended outward cuts the parent vessel lumen — so it measures vessel throughput, not sac-neck inflow.
+- **Action (C3):** confirm plane location in ParaView; if it cuts the parent vessel, clip the sampled surface to the neck region. Also blocks the deferred KEL biomarker (KEL needs the neck-clipped slice).
+- **Status:** OPEN (Phase C3, needs visual confirmation)
+
+### Feature — `run_log.md` per-case run log (2026-06-13)
+`runner.py` now writes a markdown `run_log.md` into each case directory: a header (case path, start time, pipeline) plus one section per pipeline step (label, command, full stdout/stderr in a fenced block) and the mesh-quality verdict, written **incrementally** so the log survives a mid-run `sys.exit` abort. Motivated by BUG-009 diagnosis being hampered by no persisted solver log (output was stdout-only). Helpers `_log_init`/`_log_append`; no-ops safely if the file can't be written. Tested in `tests/test_runner.py`.
+
 ### Note — Python 3.9 compatibility (2026-06-10)
 The shared `vortex-aneurysm` conda env is pinned to Python 3.9 (vtk/VMTK dependency constraints block an in-place upgrade to 3.12). The code used 3.10+ `X | Y` union type hints, so the env could not import it (`run-cfd.sh` failed at `import click`). Added `from __future__ import annotations` to all `vortex_cfd/*.py` modules and set `requires-python = ">=3.9"`. vortex-cfd does **not** depend on VMTK — it only reads VORTEX's STL output — so the two tools can live in separate envs if a future Python bump is wanted.
 
@@ -367,4 +411,5 @@ Validation checklist:
 | 2026-06-10 | Phase C2 first real run on updated VORTEX output. Fixed BUG-007 (`surfaceFieldValue` FOs used invalid ESI v2406 syntax — `surfaceType`/`patches`/missing `writeFields`/bad plane form — verified correct keys against installed v2406 caseDicts + source; neck flux `sum`→`areaNormalIntegrate`) and BUG-008 (parser read `surface_fieldValue.dat`, actual is `surfaceFieldValue.dat`). Also: `case_builder` now accepts `output_neck_plane.json` and scales the neck origin mm→m; added `from __future__ import annotations` across modules for Python 3.9 (vortex-aneurysm conda env); `requires-python >=3.9`. Pipeline ran to completion through the solver. Test suite 139/140 (the 1 failure is the pre-existing pyvista `locationInMesh` fixture artefact). Remaining: eyeball `metrics_report.json` values + ParaView patches. |
 | 2026-06-13 | Restored BUG-007/008 + Python-3.9 LLM.md docs that the Ford commit (`ab6a2f6`, made on a stale checkout) had reverted — the *code* fixes were never lost, only the documentation. Added default STL naming scheme + auto-labelling for unattended batch runs (`patch_labeller._auto_label`): `aneurysm.stl`/`wall.stl`/`inlet.stl`/`outlet_<N>.stl` auto-label with no prompt when all files match; any mismatch falls back to prompting all files (D-006). 11 new tests in `tests/test_patch_labeller.py`; suite 151 pass + 1 pre-existing fixture failure. |
 | 2026-06-13 (pm) | Batch of 3 patient runs (AA_010, AA_004, AA_011) at 0.30 m/s ICA inlet, 3 cycles, 6 cores, postprocess. AA_010/AA_004 completed; AA_011 false-aborted at checkMesh (BUG-009: skewness 6.66 > old gate of 4, though mesh was fine). Researched mesh-quality thresholds (OpenFOAM guide + CFD Support: skewness ≤ 20 usable; aneurysm-CFD lit PMC5469453). Raised skewness gate 4 → 20 (= OpenFOAM `maxBoundarySkewness`) and fixed the latent non-ortho regex that never matched checkMesh output. Added `tests/test_runner.py` (5 tests). Suite 156 pass + 1 pre-existing fixture failure. AA_011 not yet re-run (user will do it). |
+| 2026-06-13 (eve) | Sanity-checked AA_010/AA_004 metrics → **Phase C2 COMPLETE** (WSS/OSI/normalised-WSS validated, physiologically plausible). Found 3 neck-metric issues, opened **Phase C3** and logged BUG-010 (`neck_peak_velocity_ms` null — parenthesised-vector parser), BUG-011 (`neck_peak_flow_rate` sign-naive `max`), CAVEAT-012 (infinite neck plane integrates whole vessel cross-section, not sac orifice; ≈ICA throughput) — all DEFERRED, not fixed. Added per-case `run_log.md` diagnostic feature in `runner.py` (incremental markdown of every step + mesh verdict; survives abort) + 2 tests. Suite 158 pass + 1 pre-existing fixture failure. |
 | 2026-06-12 | Replaced the synthetic hand-tuned default inlet waveform with the literature-standard **Ford et al. (2005)** ICA archetype. Digitised the paper's Table 2 ICA feature points → periodic cubic spline (pure-numpy generator `data/generate_ica_ford2005.py`) → bundled `data/ica_ford2005.csv` (100 pts, mean=1, peak 1.657 @ t_norm 0.12 matching P1=1.66). `waveform.py` now loads the bundled CSV by default; `--waveform` still overrides. Confirmed `--mean-velocity` is the cycle-averaged velocity (Q_mean = U_mean × A_inlet). Updated cli help text, `pyproject.toml` package-data, and `tests/test_waveform.py` (Ford feature-timing/amplitude assertions). 140 pass, 1 pre-existing fixture failure. |
