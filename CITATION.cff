@@ -11,7 +11,9 @@ authors:
   - family-names: Luz
     given-names: Diogo
     email: diogovluz@gmail.com
-version: "0.1.0"
+    affiliation: "NOVA Medical School"
+    orcid: "https://orcid.org/0000-0002-5285-0096"
+version: "1.0.0"
 date-released: "2026-06-17"
 license: MIT
 repository-code: "https://github.com/Supperpt/vortex-cfd"
