@@ -229,3 +229,10 @@ A previous attempt at this same goal existed as `VesselForge_AutoCFD`. It is not
 - `patch_labels.json` must be written after the case directory exists, not before. The prior race condition produced runs that "completed" against an empty directory.
 - Hardcoding 4 CPU cores leaves modern hardware idle. Expose `--cores` from the start.
 - Validation ranges from the prior work, used here as sanity checks: WSS 0–50 Pa, OSI 0–0.5, velocity 0.1–1.0 m/s, pressure 0–200 Pa relative to the outlet.
+
+---
+
+## References
+
+- Ford MD, Alperin N, Lee SH, Holdsworth DW, Steinman DA. Characterization of volumetric flow rate waveforms in the normal internal carotid and vertebral arteries. *Physiol Meas* 2005;26(4):477–488. DOI [10.1088/0967-3334/26/4/013](https://doi.org/10.1088/0967-3334/26/4/013). — source of the default ICA inlet waveform (`vortex_cfd/data/ica_ford2005.csv`; feature points digitised from Table 2). Regenerate with `python -m vortex_cfd.data.generate_ica_ford2005`.
+- Cho YI, Kensey KR. Effects of the non-Newtonian viscosity of blood on flows in a diseased arterial vessel. Part 1: Steady flows. *Biorheology* 1991;28(3–4):241–262. — Carreau viscosity parameters (optional non-Newtonian model).
