@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] — 2026-06-17
+## [1.0.0] — 2026-06-17
 
 First public release, accompanying the ARTERY26 proof-of-concept study.
 
@@ -28,4 +28,4 @@ First public release, accompanying the ARTERY26 proof-of-concept study.
   is the next planned milestone. Validated outputs are TAWSS, OSI, normalised WSS,
   and sac pressure.
 
-[0.1.0]: https://github.com/Supperpt/vortex-cfd/releases/tag/v0.1.0
+[1.0.0]: https://github.com/Supperpt/vortex-cfd/releases/tag/v1.0.0

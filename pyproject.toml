@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vortex-cfd"
-version = "0.1.0"
+version = "1.0.0"
 description = "Automated pulsatile CFD pipeline for intracranial aneurysm hemodynamics (OpenFOAM)"
 readme = "README.md"
 requires-python = ">=3.10"
