@@ -33,3 +33,9 @@ vortex_cfd.log
 Thumbs.db
 *.swp
 *.swo
+
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json
+
+# Redundant test geometry (tests generate synthetic fixtures)
+test_stls/

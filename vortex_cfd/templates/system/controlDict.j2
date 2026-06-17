@@ -97,6 +97,18 @@ functions
         writeControl    writeTime;
     }
 {% endif %}
+{# ===========================================================================
+   NECK-FLOW METRICS DISABLED for the 0.1.0 release (see CAVEAT-012 / BUG-010 /
+   BUG-011 in the development branch docs).  These two surfaceFieldValue FOs are
+   scientifically unreliable as written:
+     * the infinite sampledSurface plane integrates the whole parent-vessel
+       cross-section, not the sac orifice (CAVEAT-012);
+     * neck peak velocity uses component-wise max(U) and its parser cannot read
+       the parenthesised vector token (BUG-010);
+     * neck peak flow uses a sign-naive max() on signed flux (BUG-011).
+   The block is preserved (commented) so it can be fixed and re-enabled later:
+   clip the plane to the neck orifice, switch to maxMag, peak-by-magnitude, and
+   verify in ParaView.  Re-enable by restoring the {% raw %}{% if aneurysm_patch and has_neck_plane %}{% endraw %} guard.
 {% if aneurysm_patch and has_neck_plane %}
 
     // Volumetric flow rate through the neck plane (integral of U.n over the
@@ -150,5 +162,6 @@ functions
         writeControl    writeTime;
     }
 {% endif %}
+=========================================================================== #}
 }
 {% endif %}

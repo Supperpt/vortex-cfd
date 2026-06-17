@@ -221,6 +221,8 @@ Work items:
 
 Found during C2 validation of AA_010/AA_004. The neck inflow/peak-velocity metrics are buggy or mis-scoped and must not be reported until fixed. See BUG-010/011/012.
 
+> **MILESTONE (2026-06-17, v0.1.0 release):** the neck-flow feature was **commented out** for the public 0.1.0 release rather than fixed. The two neck `surfaceFieldValue` FOs are wrapped in a Jinja comment in `controlDict.j2`, and the neck-parsing block in `postprocess.py` is commented out (the report now emits `"neck_metrics": "disabled_pending_validation"` instead of the neck keys). README documents them as experimental/disabled. **Re-enabling these (steps 1–3 below) is the next development step.** Released outputs: TAWSS, OSI, normalised WSS, sac pressure.
+
 1. **Fix `neck_peak_velocity_ms` parser (BUG-010).** `postprocess._read_surface_field_value` splits the FO line on whitespace and does `float(parts[1])` on a *parenthesised* vector token `(vx vy vz)` → `ValueError` → all rows dropped → metric is `null` in both cases. Strip the `(`/`)` (and handle the `vx vy vz)` tail) before parsing. **Also** the FO operation is `max(U)` (component-wise vector max), which is not the peak *speed* — change the neck-vel FO in `controlDict.j2` to `operation maxMag` (or compute |U| max) so the parsed scalar is the true peak speed.
 
 2. **Fix `neck_peak_flow_rate_m3s` sign (BUG-011).** `postprocess.py:432` uses `float(max(vals))` on the signed flux series. When the neck-plane normal points "outward" the flux is negative all cycle, so `max()` returns the *least-negative* value (smaller magnitude than the mean → impossible peak; AA_010: peak −1.33e-6 < mean −1.95e-6). Use peak-by-magnitude: `max(vals, key=abs)` (and likewise report `neck_mean_flow_rate` consistently, e.g. mean of |flux| or signed mean with documented convention).
@@ -390,15 +392,16 @@ The PIMPLE algorithm with 2 outer correctors gives a good balance between stabil
 
 ## ⚡ NEXT ACTION (start here)
 
-**Phase C2 is CODE-COMPLETE (2026-06-06). Validate on a real case with new VORTEX output.**
+**Phase C2 is VALIDATED and SHIPPED in v0.1.0 (2026-06-17).** Public release lives on `main`;
+ongoing work (and these dev docs) on `development`. See the repo's two-branch topology.
 
-Branch: `aneurysm_dome_biomarkers`.  All new unit tests pass (pure numpy + pyvista fixture, no OpenFOAM needed).
-
-Validation checklist:
-1. Confirm VORTEX produces `aneurysm_sac.stl`, `parent_vessel.stl`, `neck_plane.json` in the STL output directory.
-2. Run: `bash run-cfd.sh --stl-dir <new-vortex-output> --cycles 3 --mean-velocity 0.4 --cores 6 --postprocess`
-3. Check `metrics_report.json` for `aneurysm_tawss_pa`, `normalised_wss`, `sac_pressure_mean_pa`.
-4. Open case in ParaView; verify `aneurysm_sac` and `parent_vessel` are separate patches with WSS coloured on each.
+**Next step: re-enable the neck-flow metrics (Phase C3).** They are currently commented out (see the
+Phase C3 milestone note above). To resume:
+1. Fix `neck_peak_velocity_ms` parser + switch FO to `maxMag` (BUG-010).
+2. Fix `neck_peak_flow_rate_m3s` peak-by-magnitude (BUG-011).
+3. Clip the neck sampling plane to the orifice and verify in ParaView (CAVEAT-012).
+4. Un-comment the neck block in `controlDict.j2` and `postprocess.py`, re-validate on a real case,
+   then resume the deferred **WSSG + KEL pvbatch** work (`vortexcfd_biomarkers_plan.md` §6).
 
 **Deferred — WSSG + KEL (pvbatch).** See Phase C2 notes and `vortexcfd_biomarkers_plan.md` §6.
 

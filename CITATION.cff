@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "vortex-cfd: Automated pulsatile CFD pipeline for intracranial aneurysm hemodynamics"
+abstract: >-
+  vortex-cfd generates complete OpenFOAM case directories from patient-derived STL
+  geometries, runs pulsatile incompressible Navier-Stokes (pimpleFoam) over multiple
+  cardiac cycles, and computes hemodynamic biomarkers (TAWSS, OSI, normalised WSS,
+  sac pressure) scoped to the aneurysm dome.
+type: software
+authors:
+  - family-names: Luz
+    given-names: Diogo
+    email: diogovluz@gmail.com
+version: "0.1.0"
+date-released: "2026-06-17"
+license: MIT
+repository-code: "https://github.com/Supperpt/vortex-cfd"
+keywords:
+  - computational fluid dynamics
+  - OpenFOAM
+  - intracranial aneurysm
+  - hemodynamics
+  - wall shear stress
+  - oscillatory shear index
+# doi: 10.5281/zenodo.XXXXXXX   # TODO: add the Zenodo DOI after the v0.1.0 archive is minted

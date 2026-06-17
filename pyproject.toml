@@ -1,11 +1,26 @@
 [build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.backends.legacy:build"
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "vortex-cfd"
 version = "0.1.0"
-requires-python = ">=3.9"
+description = "Automated pulsatile CFD pipeline for intracranial aneurysm hemodynamics (OpenFOAM)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Diogo Luz", email = "diogovluz@gmail.com" }]
+keywords = ["CFD", "OpenFOAM", "hemodynamics", "aneurysm", "WSS", "OSI", "biomarkers"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Operating System :: POSIX :: Linux",
+]
 dependencies = [
     "jinja2>=3.1",
     "numpy>=1.24",
@@ -13,8 +28,18 @@ dependencies = [
     "click>=8.1",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.urls]
+Repository = "https://github.com/Supperpt/vortex-cfd"
+"Bug Tracker" = "https://github.com/Supperpt/vortex-cfd/issues"
+
 [project.scripts]
 vortex-cfd = "vortex_cfd.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["vortex_cfd*"]
 
 [tool.setuptools.package-data]
 vortex_cfd = ["templates/**/*", "data/*.csv"]

@@ -420,24 +420,27 @@ def compute_metrics(
         else:
             report["sac_pressure_peak_pa"] = None
 
-        # Neck inflow rate from surfaceFieldValue postProcessing CSVs.
-        flux_rows = _read_surface_field_value(
-            case_dir, "surfaceFieldValue_neck_flux", t_start)
-        peak_vel_rows = _read_surface_field_value(
-            case_dir, "surfaceFieldValue_neck_peak_vel", t_start)
-
-        if flux_rows:
-            vals = [v for _, v in flux_rows]
-            report["neck_mean_flow_rate_m3s"] = float(np.mean(vals))
-            report["neck_peak_flow_rate_m3s"] = float(max(vals))
-        else:
-            report["neck_mean_flow_rate_m3s"] = None
-            report["neck_peak_flow_rate_m3s"] = None
-
-        if peak_vel_rows:
-            report["neck_peak_velocity_ms"] = float(max(v for _, v in peak_vel_rows))
-        else:
-            report["neck_peak_velocity_ms"] = None
+        # Neck-flow metrics DISABLED for the 0.1.0 release (see CAVEAT-012 /
+        # BUG-010 / BUG-011 in the development branch docs).  The neck
+        # surfaceFieldValue function objects are commented out in
+        # templates/system/controlDict.j2 because the infinite sampling plane
+        # integrates the whole parent-vessel cross-section rather than the sac
+        # orifice, and the flux/peak-velocity parsing is unreliable.  The
+        # validated outputs are TAWSS, OSI, normalised WSS and sac pressure.
+        # To re-enable: fix the FOs (clip plane to neck, maxMag, peak-by-
+        # magnitude, verify in ParaView) and restore the block below.
+        report["neck_metrics"] = "disabled_pending_validation"
+        #
+        # flux_rows = _read_surface_field_value(
+        #     case_dir, "surfaceFieldValue_neck_flux", t_start)
+        # peak_vel_rows = _read_surface_field_value(
+        #     case_dir, "surfaceFieldValue_neck_peak_vel", t_start)
+        # if flux_rows:
+        #     vals = [v for _, v in flux_rows]
+        #     report["neck_mean_flow_rate_m3s"] = float(np.mean(vals))
+        #     report["neck_peak_flow_rate_m3s"] = float(max(vals, key=abs))
+        # if peak_vel_rows:
+        #     report["neck_peak_velocity_ms"] = float(max(v for _, v in peak_vel_rows))
 
     report["generated"] = datetime.now().isoformat(timespec="seconds")
 

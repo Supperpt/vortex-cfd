@@ -41,7 +41,7 @@ Given a directory of STLs produced by VORTEX with `--split-patches` (one file pe
    | `wall.stl` | parent vessel | wall |
    | `inlet.stl` | inlet | inlet |
    | `outlet_1.stl`, `outlet_2.stl`, … | outlet | outlet |
-   | `neck_plane.json` (optional) | neck plane for inflow/peak-velocity metrics | — |
+   | `neck_plane.json` (optional) | neck plane for inflow/peak-velocity metrics *(experimental, disabled this release)* | — |
 
    If any STL is unrecognised or the counts are wrong (e.g. no inlet), the program prompts for **all** files rather than guessing.
 3. **Scales the geometry from millimetres to metres.** Medical imaging works in mm; OpenFOAM assumes SI metres. Failing to scale gives results that look plausible but are off by 10⁹ in velocity — a class of bug already learned the hard way in a prior iteration of this work.
@@ -187,8 +187,14 @@ bash run-cfd.sh --postprocess-only <path/to/case_YYYYMMDD_HHMMSS>
 
 `metrics_report.json` contains mean/max TAWSS (in Pa and kinematic), mean/max OSI, the area fraction with
 OSI > 0.3 and TAWSS < 0.4 Pa (the low-and-oscillatory risk zone), the analysed cycle window, and
-validation flags. The `wallShearStress` and `wallShearStressMean` fields are also viewable on the wall
-patch in ParaView.
+validation flags. In aneurysm (two-patch) mode it also reports the normalised WSS (sac/parent) and the
+sac pressure (mean/peak, in Pa). The `wallShearStress` and `wallShearStressMean` fields are also viewable
+on the wall patch in ParaView.
+
+> **Experimental (currently disabled):** neck-plane inflow rate and peak velocity are **not** computed in
+> this release. The underlying function objects are commented out pending validation — the infinite
+> sampling plane integrates the whole parent-vessel cross-section rather than the sac orifice, so the
+> values are not yet trustworthy. The validated outputs are TAWSS, OSI, normalised WSS, and sac pressure.
 
 ---
 

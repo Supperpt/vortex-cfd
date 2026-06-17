@@ -83,6 +83,12 @@ wallShearStress
 
 ### 4b. surfaceFieldValue — Neck Inflow Rate and Peak Velocity
 
+> **DISABLED in v0.1.0 (2026-06-17).** This feature is commented out for the public release (see the
+> Phase C3 milestone in `LLM.md` and BUG-010/011 + CAVEAT-012). The neck FOs in `controlDict.j2` and the
+> neck-parsing block in `postprocess.py` are commented out; the report emits
+> `"neck_metrics": "disabled_pending_validation"`. Re-enable after fixing the parser/operation and
+> clipping the plane to the orifice.
+
 The neck plane geometry comes from `neck_plane.json` (passed into the Jinja2 context as `neck_origin` and `neck_normal`).
 
 ```
