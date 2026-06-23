@@ -39,3 +39,6 @@ Thumbs.db
 
 # Redundant test geometry (tests generate synthetic fixtures)
 test_stls/
+
+# Local code-review scratch output (not a repo artifact)
+code_review.md
