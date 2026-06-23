@@ -7,14 +7,20 @@ from pathlib import Path
 import pyvista as pv
 
 MM_TO_M = 0.001
-# If any axis of the bounding box exceeds this value (metres assumed), it's in mm.
+# If any bounding-box extent exceeds this value (metres assumed), it's in mm.
 _BBOX_THRESHOLD = 1.0
 
 
 def _any_in_mm(stl_paths: list[Path]) -> bool:
     for path in stl_paths:
         mesh = pv.read(str(path))
-        if max(abs(v) for v in mesh.bounds) > _BBOX_THRESHOLD:
+        # Use bounding-box extents (size), not max absolute coordinate, so the
+        # check is translation-invariant. Medical scans carry coordinates tied to
+        # the scanner isocenter, so measuring distance-from-origin could misjudge
+        # the unit if the geometry is offset from (0,0,0).
+        xmin, xmax, ymin, ymax, zmin, zmax = mesh.bounds
+        max_extent = max(xmax - xmin, ymax - ymin, zmax - zmin)
+        if max_extent > _BBOX_THRESHOLD:
             return True
     return False
 

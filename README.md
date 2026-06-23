@@ -75,7 +75,7 @@ Everything else — fluid density, viscosity, turbulence model, time-stepping st
 These are the deliberate, locked decisions for this pipeline. They are not user-tunable in normal operation; deviating from them requires editing the templates and is documented as a research-mode change.
 
 ### Geometry and units
-- **Scaling:** auto-detected ×0.001 (mm→m) when the bounding-box maximum exceeds 1.0.
+- **Scaling:** auto-detected ×0.001 (mm→m) when the bounding-box extent exceeds 1.0.
 - **Inlet/outlet identification:** interactive prompt at runtime. VMTK assigns cap IDs geometrically; only a human knows which opening is the parent vessel.
 
 ### Fluid model

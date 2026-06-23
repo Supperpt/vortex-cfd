@@ -17,6 +17,17 @@ class TestDetection:
         # Even if only one file in the list is in mm, detection fires
         assert _any_in_mm([stl_paths_mm[0]]) is True
 
+    def test_metre_geometry_offset_from_origin_not_detected_as_mm(self, tmp_path):
+        """Regression: a metre-scale mesh positioned far from the origin (as
+        happens when DICOM coordinates are tied to the scanner isocenter) must
+        not be flagged as mm. Detection uses bounding-box extents, not the
+        absolute distance from (0,0,0)."""
+        mesh = pv.Sphere(radius=0.008, theta_resolution=20, phi_resolution=20)
+        mesh.points += (1.5, 1.5, 1.5)  # extent stays 0.016 m, |coords| > 1.0
+        path = tmp_path / "wall.stl"
+        mesh.save(str(path), binary=False)
+        assert _any_in_mm([path]) is False
+
 
 class TestScaling:
     def test_metre_geometry_not_scaled(self, stl_paths_m, labels_m):
