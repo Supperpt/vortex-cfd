@@ -29,9 +29,25 @@ if [ -f "$SCRIPT_DIR/.venv/bin/python" ]; then
 elif [ "${CONDA_DEFAULT_ENV:-}" = "vortex-aneurysm" ] && [ -n "$CONDA_PREFIX" ]; then
     exec "$CONDA_PREFIX/bin/python" -m vortex_cfd "$@"
 else
-    # Active env is not vortex-aneurysm — activate it and run Python directly.
-    CONDA_SH="$HOME/miniconda3/etc/profile.d/conda.sh"
-    if [ -f "$CONDA_SH" ]; then
+    # Active env is not vortex-aneurysm — locate the conda base and activate it.
+    # Don't hardcode a single distribution: miniforge/mambaforge/anaconda all
+    # live under different directories. Prefer `conda info --base` if conda is on
+    # PATH, then fall back to the common install locations.
+    CONDA_SH=""
+    if command -v conda >/dev/null 2>&1; then
+        _base="$(conda info --base 2>/dev/null)"
+        [ -n "$_base" ] && [ -f "$_base/etc/profile.d/conda.sh" ] && CONDA_SH="$_base/etc/profile.d/conda.sh"
+    fi
+    if [ -z "$CONDA_SH" ]; then
+        for _base in "$HOME/miniforge3" "$HOME/mambaforge" "$HOME/miniconda3" "$HOME/anaconda3" "/opt/conda"; do
+            if [ -f "$_base/etc/profile.d/conda.sh" ]; then
+                CONDA_SH="$_base/etc/profile.d/conda.sh"
+                break
+            fi
+        done
+    fi
+
+    if [ -n "$CONDA_SH" ]; then
         source "$CONDA_SH"
         conda activate vortex-aneurysm
         exec "$CONDA_PREFIX/bin/python" -m vortex_cfd "$@"

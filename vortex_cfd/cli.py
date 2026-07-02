@@ -16,9 +16,12 @@ from .runner import run_pipeline, run_postprocess_only
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.option("--stl-dir",       default=None, type=click.Path(exists=True, file_okay=False),
               help="Directory containing wall + cap STLs from VORTEX (--split-patches).")
-@click.option("--cycles",        type=click.IntRange(min=2), default=3, show_default=True,
+@click.option("--cycles",        type=click.IntRange(min=2), default=None,
+              show_default="3 for a full run; derived from the data for --postprocess-only",
               help="Number of cardiac cycles to simulate (first discarded, last analysed). "
-                   "Must be >= 2.")
+                   "Must be >= 2. Defaults to 3 for a full run. For --postprocess-only, "
+                   "omit it to derive the last cycle from the case data, or pass the exact "
+                   "cycle count the case was solved with.")
 @click.option("--mean-velocity", default=None, type=float,
               help="Cycle-averaged (mean) inlet velocity in m/s (typical ICA: 0.3–0.5).")
 @click.option("--waveform",      "waveform_csv", default=None,
@@ -50,12 +53,21 @@ def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
     produces a complete, runnable OpenFOAM case with WSS-resolved boundary layers.
     """
     # Standalone post-processing of an existing case — no meshing/solving.
+    # Pass cycles through as-is: when the user omitted --cycles it is None, and
+    # compute_metrics derives the last cycle from the case's own snapshot times.
+    # Defaulting it to 3 here would silently analyse the wrong window for any
+    # case not solved with exactly 3 cycles.
     if postprocess_only:
         of_env = check_openfoam()
         click.echo(f"OpenFOAM {of_env['version']} detected at {of_env['root'] or '(sourced)'}")
         click.echo(f"Post-processing existing case: {postprocess_only}")
         run_postprocess_only(Path(postprocess_only), of_env, cycles=cycles)
         return
+
+    # A full run needs a concrete cycle count; 3 is the documented default
+    # (first discarded as transient, last analysed).
+    if cycles is None:
+        cycles = 3
 
     # Normal run requires the patient-specific inputs.
     if stl_dir is None or mean_velocity is None:
