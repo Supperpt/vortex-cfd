@@ -26,6 +26,7 @@ Legacy mode: metrics are scoped to the single ``wall`` patch as in Phase C.
 from __future__ import annotations
 
 import json
+import warnings
 from datetime import datetime
 from pathlib import Path
 
@@ -33,10 +34,7 @@ import numpy as np
 import pyvista as pv
 
 from .waveform import T_CYCLE
-
-# Default fluid properties (kept in sync with case_builder defaults).
-RHO = 1060.0      # kg/m^3, whole blood
-NU = 3.3e-6       # m^2/s, kinematic viscosity
+from .constants import RHO, NU
 
 # Validation ranges (warn — never abort — if a metric falls outside).
 WSS_MAX_PA = 50.0
@@ -105,6 +103,17 @@ def osi(wss_series: np.ndarray, weights: np.ndarray | None = None) -> np.ndarray
     return 0.5 * (1.0 - ratio)
 
 
+def _area_weighted_mean(field: np.ndarray, areas: np.ndarray) -> float:
+    """
+    Area-weighted mean of ``field``.  Falls back to an unweighted mean when the
+    weights sum to zero (degenerate mesh) instead of raising ZeroDivisionError.
+    """
+    areas = np.asarray(areas, dtype=float)
+    if areas.sum() <= 0:
+        return float(np.mean(field))
+    return float(np.average(field, weights=areas))
+
+
 def summary_stats(
     tawss_kin: np.ndarray,
     osi_field: np.ndarray,
@@ -119,15 +128,20 @@ def summary_stats(
     total_area = float(areas.sum())
     tawss_pa = rho * tawss_kin
 
+    if total_area <= 0:
+        warnings.warn(
+            f"Total wall area is {total_area} (<= 0) — geometry may be degenerate; "
+            "reporting unweighted means and zero area fractions.",
+            stacklevel=2,
+        )
+
     def area_fraction(mask: np.ndarray) -> float:
         if total_area <= 0:
             return 0.0
         return float(areas[mask].sum() / total_area)
 
     def wmean(field: np.ndarray) -> float:
-        if total_area <= 0:
-            return float(field.mean())
-        return float(np.average(field, weights=areas))
+        return _area_weighted_mean(field, areas)
 
     return {
         "tawss_pa": {
@@ -319,7 +333,6 @@ def compute_metrics(
     t_cycle: float = T_CYCLE,
     rho: float = RHO,
     nu: float = NU,
-    wall_patch: str = "wall",
 ) -> dict:
     """
     Compute TAWSS / OSI over the last cardiac cycle and write
@@ -339,6 +352,11 @@ def compute_metrics(
     """
     case_dir = Path(case_dir)
     if cycles is not None:
+        if cycles < 2:
+            raise ValueError(
+                f"cycles must be >= 2 so at least one transient cycle is discarded "
+                f"(got {cycles})."
+            )
         t_start = (cycles - 1) * t_cycle
     else:
         t_max = max(available_times(case_dir))
@@ -355,7 +373,8 @@ def compute_metrics(
               f"(t >= {t_start:.4f}s) ...")
 
     # Primary patch: aneurysm_sac in new mode, wall in legacy mode.
-    primary_patch = aneurysm_patch if is_new_mode else wall_patch
+    # _detect_patches returns parent_vessel_patch == "wall" for legacy.
+    primary_patch = aneurysm_patch if is_new_mode else parent_vessel_patch
     times, wss, areas = read_wss_series(case_dir, t_start, primary_patch)
     weights = _time_weights(times)
 
@@ -391,8 +410,7 @@ def compute_metrics(
         _, wss_pv, areas_pv = read_wss_series(case_dir, t_start, parent_vessel_patch)
         w_pv = _time_weights(times)
         tawss_pv_kin = tawss(wss_pv, w_pv)
-        parent_tawss_pa = float(rho * np.average(tawss_pv_kin,
-                                                   weights=np.asarray(areas_pv)))
+        parent_tawss_pa = float(rho * _area_weighted_mean(tawss_pv_kin, areas_pv))
         report["parent_tawss_pa_mean"] = parent_tawss_pa
 
         sac_tawss_mean = report["aneurysm_tawss_pa"]["mean"]

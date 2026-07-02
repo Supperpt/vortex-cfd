@@ -1,5 +1,3 @@
-jinja2>=3.1
-numpy>=1.24
-pyvista>=0.43
-click>=8.1
-pytest>=8.0
+# Dependencies are declared in pyproject.toml (single source of truth).
+# Install the package plus its dev extras:
+-e .[dev]

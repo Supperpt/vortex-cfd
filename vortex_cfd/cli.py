@@ -16,8 +16,9 @@ from .runner import run_pipeline, run_postprocess_only
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.option("--stl-dir",       default=None, type=click.Path(exists=True, file_okay=False),
               help="Directory containing wall + cap STLs from VORTEX (--split-patches).")
-@click.option("--cycles",        type=int, default=3, show_default=True,
-              help="Number of cardiac cycles to simulate (first discarded, last analysed).")
+@click.option("--cycles",        type=click.IntRange(min=2), default=3, show_default=True,
+              help="Number of cardiac cycles to simulate (first discarded, last analysed). "
+                   "Must be >= 2.")
 @click.option("--mean-velocity", default=None, type=float,
               help="Cycle-averaged (mean) inlet velocity in m/s (typical ICA: 0.3–0.5).")
 @click.option("--waveform",      "waveform_csv", default=None,

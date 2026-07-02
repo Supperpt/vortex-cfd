@@ -1,6 +1,8 @@
 """Detect millimetre geometry and scale all STLs to metres (SI)."""
 from __future__ import annotations
 
+import atexit
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -11,9 +13,17 @@ MM_TO_M = 0.001
 _BBOX_THRESHOLD = 1.0
 
 
+def read_stl(path: Path):
+    """Read an STL via pyvista, raising a clear error for invalid/missing files."""
+    try:
+        return pv.read(str(path))
+    except Exception as e:  # pyvista raises a variety of low-level read errors
+        raise ValueError(f"Could not read STL '{path}': {e}") from e
+
+
 def _any_in_mm(stl_paths: list[Path]) -> bool:
     for path in stl_paths:
-        mesh = pv.read(str(path))
+        mesh = read_stl(path)
         # Use bounding-box extents (size), not max absolute coordinate, so the
         # check is translation-invariant. Medical scans carry coordinates tied to
         # the scanner isocenter, so measuring distance-from-origin could misjudge
@@ -42,6 +52,9 @@ def scale_stls(stl_paths: list[Path], labels: dict[Path, str]) -> dict[str, Path
         print("Coordinates appear to be in metres — no scaling applied.")
 
     tmp = Path(tempfile.mkdtemp(prefix="vortex_cfd_stls_"))
+    # The scaled STLs must outlive scale_stls (build_case copies them later), so
+    # we can't use a `with` block. Remove the temp dir at process exit instead.
+    atexit.register(shutil.rmtree, tmp, ignore_errors=True)
     outlet_idx = 0
     result: dict[str, Path] = {}
 
@@ -53,7 +66,7 @@ def scale_stls(stl_paths: list[Path], labels: dict[Path, str]) -> dict[str, Path
         else:
             canonical = label  # 'wall' or 'inlet'
 
-        mesh = pv.read(str(path))
+        mesh = read_stl(path)
         if needs_scale:
             mesh.points *= MM_TO_M
 

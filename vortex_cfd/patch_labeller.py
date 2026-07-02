@@ -11,7 +11,8 @@ import sys
 from pathlib import Path
 
 import click
-import pyvista as pv
+
+from .scaling import read_stl
 
 # Legacy mode: single wall patch.
 VALID_LABELS_LEGACY = ("wall", "inlet", "outlet")
@@ -84,7 +85,7 @@ def _auto_label(stl_paths: list[Path], legacy: bool) -> dict[Path, str] | None:
 
 def _describe(path: Path) -> str:
     try:
-        mesh = pv.read(str(path))
+        mesh = read_stl(path)
         c = mesh.center
         sized = mesh.compute_cell_sizes()
         area = float(sized.cell_data["Area"].sum())

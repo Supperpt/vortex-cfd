@@ -44,7 +44,6 @@ stl_paths = sorted(stl_dir.glob("*.stl"))
 assert stl_paths, f"No STL files in {stl_dir}"
 
 # Build a minimal label dict: largest surface → wall, rest → inlet + outlets
-from vortex_cfd.patch_labeller import VALID_LABELS
 import pyvista as pv
 
 areas = {}

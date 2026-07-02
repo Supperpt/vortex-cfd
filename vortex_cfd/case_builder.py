@@ -8,11 +8,11 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-import pyvista as pv
 from jinja2 import Environment, FileSystemLoader
 
 from .waveform import T_CYCLE
-from .scaling import _any_in_mm
+from .scaling import _any_in_mm, read_stl
+from .constants import RHO, NU
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -44,7 +44,7 @@ def _bbox_with_buffer(wall_stls: "Path | list[Path]", buffer: float = 0.20) -> d
     """
     if isinstance(wall_stls, Path):
         wall_stls = [wall_stls]
-    bounds = [pv.read(str(p)).bounds for p in wall_stls]
+    bounds = [read_stl(p).bounds for p in wall_stls]
     xmin = min(b[0] for b in bounds)
     xmax = max(b[1] for b in bounds)
     ymin = min(b[2] for b in bounds)
@@ -77,7 +77,7 @@ def _location_in_mesh(inlet_stl: Path) -> tuple[float, float, float]:
     This replaces the bounding-box centre of the wall STL, which fails for
     curved vessels where the bbox centre falls inside the wall material.
     """
-    mesh = pv.read(str(inlet_stl))
+    mesh = read_stl(inlet_stl)
     sized = mesh.compute_cell_sizes()
     areas = sized.cell_data["Area"]
     total_area = areas.sum()
@@ -98,9 +98,15 @@ def _location_in_mesh(inlet_stl: Path) -> tuple[float, float, float]:
 
 
 def _inlet_area(inlet_stl: Path) -> float:
-    mesh = pv.read(str(inlet_stl))
+    mesh = read_stl(inlet_stl)
     sized = mesh.compute_cell_sizes()
-    return float(sized.cell_data["Area"].sum())
+    area = float(sized.cell_data["Area"].sum())
+    if not np.isfinite(area) or area <= 0:
+        raise ValueError(
+            f"Inlet STL '{inlet_stl}' produced a non-physical area {area}. "
+            "The surface may be corrupt, empty, or degenerate."
+        )
+    return area
 
 
 def _waveform_table(
@@ -237,8 +243,8 @@ def build_case(
         "write_interval":      write_interval,
         "max_co":              0.8,
         "cores":               cores,
-        "nu":                  3.3e-6,
-        "rho":                 1060.0,
+        "nu":                  NU,
+        "rho":                 RHO,
         "bbox":                bbox,
         "nx":                  cell_counts["nx"],
         "ny":                  cell_counts["ny"],

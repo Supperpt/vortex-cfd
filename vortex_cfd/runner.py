@@ -96,21 +96,34 @@ def _check_mesh_quality(output: str) -> None:
 
     # checkMesh prints "Mesh non-orthogonality Max: 69.96 average: 12.28"
     # (note the word order and ':' — not "Max non-orthogonality = ").
-    m = re.search(r"non-orthogonality Max:\s*([\d.]+)", output)
-    if m and float(m.group(1)) > 70:
+    ortho_m = re.search(r"non-orthogonality Max:\s*([\d.]+)", output)
+    if ortho_m and float(ortho_m.group(1)) > 70:
         print(
-            f"ERROR: maxNonOrtho = {float(m.group(1)):.1f} ° > 70 ° threshold.",
+            f"ERROR: maxNonOrtho = {float(ortho_m.group(1)):.1f} ° > 70 ° threshold.",
             file=sys.stderr,
         )
         bad = True
 
-    m = re.search(r"Max skewness\s*=\s*([\d.]+)", output)
-    if m and float(m.group(1)) > 20:
+    skew_m = re.search(r"Max skewness\s*=\s*([\d.]+)", output)
+    if skew_m and float(skew_m.group(1)) > 20:
         print(
-            f"ERROR: maxSkewness = {float(m.group(1)):.2f} > 20 threshold.",
+            f"ERROR: maxSkewness = {float(skew_m.group(1)):.2f} > 20 threshold.",
             file=sys.stderr,
         )
         bad = True
+
+    # Fail-safe: if neither metric was found, the output format changed (new
+    # OpenFOAM release, locale, or a truncated log). Don't let the gate pass
+    # silently — warn loudly so a bad mesh isn't waved through.
+    if ortho_m is None and skew_m is None:
+        print(
+            "WARNING: could not parse non-orthogonality or skewness from checkMesh "
+            "output — the mesh quality gate was NOT enforced. Inspect the mesh "
+            "manually before trusting the solution.",
+            file=sys.stderr,
+        )
+        _log_append("\n## Mesh quality gate — NOT ENFORCED\n\n"
+                    "checkMesh output could not be parsed (format change?).\n")
 
     if bad:
         print(
