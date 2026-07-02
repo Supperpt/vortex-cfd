@@ -233,3 +233,31 @@ class TestReadSurfaceFieldValue:
     def test_missing_function_object_returns_empty(self, tmp_path):
         rows = _read_surface_field_value(tmp_path, "nonexistent_fo", t_start=0.0)
         assert rows == []
+
+    def test_merges_multiple_restart_time_dirs(self, tmp_path):
+        # A restarted solve writes one time-named subdir per restart. Rows from
+        # all of them must be merged in numerical time order (not just the
+        # earliest dir), with later dirs winning on overlapping boundary times.
+        base = tmp_path / "postProcessing" / "fo"
+        (base / "0").mkdir(parents=True)
+        (base / "0" / "surfaceFieldValue.dat").write_text(
+            textwrap.dedent(
+                """\
+                0.500  1.0
+                0.857  2.0
+                """
+            )
+        )
+        # Restart directory; 0.857 overlaps and should be overwritten by 9.0.
+        (base / "0.857").mkdir(parents=True)
+        (base / "0.857" / "surfaceFieldValue.dat").write_text(
+            textwrap.dedent(
+                """\
+                0.857  9.0
+                1.000  3.0
+                """
+            )
+        )
+        rows = _read_surface_field_value(tmp_path, "fo", t_start=0.0)
+        assert [t for t, _ in rows] == pytest.approx([0.500, 0.857, 1.000])
+        assert dict(rows)[0.857] == pytest.approx(9.0)

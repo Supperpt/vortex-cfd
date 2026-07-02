@@ -290,37 +290,47 @@ def _read_surface_field_value(
     if not pp_dir.exists():
         return []
 
-    # Use the earliest time directory (matches the simulation startTime).
-    time_dirs = sorted(pp_dir.iterdir())
+    # A restarted solve writes one time-named subdirectory per restart, each
+    # holding the rows from that restart onward. Read them all in numerical time
+    # order and merge, so no cycle is missed; where restart boundaries overlap,
+    # the later directory's value for a given time wins.
+    def _dir_time(p: Path) -> float:
+        try:
+            return float(p.name)
+        except ValueError:
+            return float("inf")
+
+    time_dirs = sorted((d for d in pp_dir.iterdir() if d.is_dir()), key=_dir_time)
     if not time_dirs:
         return []
 
-    dat_path = time_dirs[0] / "surfaceFieldValue.dat"
-    if not dat_path.exists():
-        return []
-
-    rows: list[tuple[float, float]] = []
-    with dat_path.open() as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split()
-            if len(parts) < 2:
-                continue
-            try:
-                t = float(parts[0])
-                if t < t_start - 1e-9:
+    merged: dict[float, float] = {}
+    for tdir in time_dirs:
+        dat_path = tdir / "surfaceFieldValue.dat"
+        if not dat_path.exists():
+            continue
+        with dat_path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
                     continue
-                if len(parts) == 2:
-                    rows.append((t, float(parts[1])))
-                elif len(parts) == 4:
-                    # Vector: (time, vx, vy, vz) — report magnitude.
-                    vx, vy, vz = float(parts[1]), float(parts[2]), float(parts[3])
-                    rows.append((t, float(np.sqrt(vx**2 + vy**2 + vz**2))))
-            except ValueError:
-                pass
-    return rows
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                try:
+                    t = float(parts[0])
+                    if t < t_start - 1e-9:
+                        continue
+                    if len(parts) == 2:
+                        merged[t] = float(parts[1])
+                    elif len(parts) == 4:
+                        # Vector: (time, vx, vy, vz) — report magnitude.
+                        vx, vy, vz = float(parts[1]), float(parts[2]), float(parts[3])
+                        merged[t] = float(np.sqrt(vx**2 + vy**2 + vz**2))
+                except ValueError:
+                    pass
+
+    return [(t, merged[t]) for t in sorted(merged)]
 
 
 # ---------------------------------------------------------------------------
@@ -382,8 +392,9 @@ def compute_metrics(
     osi_field = osi(wss, weights)
     stats = summary_stats(tawss_kin, osi_field, areas, rho)
 
-    in_wss_range = bool(stats["tawss_pa"]["max"] <= WSS_MAX_PA
-                        and stats["tawss_pa"]["min"] >= 0.0)
+    # TAWSS is a mean of vector magnitudes, so it is non-negative by
+    # construction — only the upper bound is a meaningful validation check.
+    in_wss_range = bool(stats["tawss_pa"]["max"] <= WSS_MAX_PA)
     in_osi_range = bool(0.0 <= stats["osi"]["max"] <= OSI_MAX)
 
     report: dict = {
@@ -407,8 +418,10 @@ def compute_metrics(
         report["aneurysm_n_faces"] = report.pop("n_wall_faces")
 
         # Parent vessel mean TAWSS (used as normalisation denominator).
-        _, wss_pv, areas_pv = read_wss_series(case_dir, t_start, parent_vessel_patch)
-        w_pv = _time_weights(times)
+        # Weight by the parent patch's own snapshot times rather than reusing
+        # the sac's — identical for a normal solve, but not coupled to it.
+        times_pv, wss_pv, areas_pv = read_wss_series(case_dir, t_start, parent_vessel_patch)
+        w_pv = _time_weights(times_pv)
         tawss_pv_kin = tawss(wss_pv, w_pv)
         parent_tawss_pa = float(rho * _area_weighted_mean(tawss_pv_kin, areas_pv))
         report["parent_tawss_pa_mean"] = parent_tawss_pa
