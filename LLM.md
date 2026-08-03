@@ -211,7 +211,7 @@ Work items:
 - `postprocess.py` — auto-detects mode from `patch_labels.json`; in new mode computes TAWSS/OSI on `aneurysm_sac`, parent mean TAWSS, normalised WSS, and parses postProcessing CSVs for sac pressure and neck flow rate; `metrics_report.json` gets new keys (`aneurysm_tawss_pa`, `aneurysm_osi`, `normalised_wss`, `parent_tawss_pa_mean`, `sac_pressure_mean_pa`, `sac_pressure_peak_pa`, `neck_mean_flow_rate_m3s`, `neck_peak_flow_rate_m3s`, `neck_peak_velocity_ms`).
 
 **Deferred from this phase:**
-- **WSSG** (Wall Shear Stress Gradient) and **KEL** (Kinetic Energy Loss) require surface spatial gradients and volumetric flux integration that have no native OpenFOAM function object.  Both are to be implemented as a `pvbatch` Python script as described in `vortexcfd_biomarkers_plan.md` §6, gated by a `--pvbatch` flag.  Steps per the plan:
+- **WSSG** (Wall Shear Stress Gradient) and **KEL** (Kinetic Energy Loss) require surface spatial gradients and volumetric flux integration that have no native OpenFOAM function object.  Both are to be implemented as a `pvbatch` Python script as described in `docs/planning/vortexcfd_biomarkers_plan.md` §6, gated by a `--pvbatch` flag.  Steps per the plan:
   - WSSG: `aneurysm_sac` block → "Gradient Of Unstructured Dataset" on `wallShearStress` → `mag(gradient)` → Temporal Statistics.
   - KEL: slice at neck plane → `0.5 × ρ × |U|² × (U·n̂)` calculator → Integrate Variables → cycle-averaged scalar.
 
@@ -229,7 +229,26 @@ Found during C2 validation of AA_010/AA_004. The neck inflow/peak-velocity metri
 
 3. **Verify neck-plane extent / KEL scoping (CAVEAT-013).** The neck FO is an *infinite* `sampledSurface` plane, so `areaNormalIntegrate(U)` integrates over the whole vessel cross-section it cuts, not just the aneurysm-neck orifice. Evidence: neck mean flux (~1.9–2.5e-6 m³/s) ≈ ICA parent throughput (v·A ≈ 2.7e-6). As labelled, "neck inflow rate" likely measures parent-vessel flow, and a true sac neck has ~0 net cyclic flux. Confirm the plane location in ParaView; if it cuts the parent vessel, clip the sampled surface to the neck region (needed before KEL too). This blocks the deferred KEL biomarker.
 
-(Then resume the **WSSG + KEL pvbatch** work deferred from C2 — see `vortexcfd_biomarkers_plan.md` §6.)
+(Then resume the **WSSG + KEL pvbatch** work deferred from C2 — see `docs/planning/vortexcfd_biomarkers_plan.md` §6.)
+
+---
+
+### Phase C4 — Womersley inlet profile (PLANNED, opened 2026-08-03)
+
+**Priority: immediately after Phase C3, before Phase D.** Publication-grade analytical
+inlet required for the paper: an opt-in `--womersley` flag replacing the default
+parabolic `flowRateInletVelocity` inlet with the exact Womersley profile
+(Fourier decomposition of the waveform + complex-Bessel radial shape per harmonic),
+delivered via `timeVaryingMappedFixedValue` boundaryData (no runtime C++ compilation).
+
+This re-applies the validated design prototyped on the abandoned
+`phase_b_womersley_inlet` branch (forked pre-Phase-C2, ~18 commits behind
+`development` — too stale to merge/rebase) onto current `development`, dropping the
+unrelated items that branch bundled (`--dry-run`, snappy retry, `print`→`logging`
+migration — out of scope, would regress `run_log.md`). Full design, file-by-file
+implementation plan, the multi-cycle boundaryData tiling fix (branch bug: data must
+tile across `cycles · T`, not just one cycle), and the rejected `codedFixedValue`
+alternative are in **`docs/planning/fable_womersley_plan.md`**.
 
 ---
 
@@ -242,6 +261,38 @@ Found during C2 validation of AA_010/AA_004. The neck inflow/peak-velocity metri
 3. **Mesh-independence helper** — Runs three mesh densities (coarse/medium/fine) and reports WSS convergence. Scheduled for after Phase C.
 
 4. **FSI placeholder** — Reserved folder hooks for future fluid–structure interaction work.
+
+---
+
+### Phase E — Extended rupture-risk biomarker suite (PLANNED, opened 2026-08-03)
+
+Goal: get the pipeline to a place where it can compute the full set of biomarkers
+identified by literature review as likely discriminants for **small (<5mm) intracranial
+aneurysm rupture**, beyond the current TAWSS/OSI/normalised-WSS/sac-pressure set. See
+**`docs/planning/Biomarcadores_candidatos.md`** for the full research summary
+(evidence, effect sizes, and an overfitting caution for small-aneurysm cohorts).
+
+Candidate metrics, roughly in order of expected significance for this population:
+- **Size Ratio (SR)** — morphological, aneurysm/parent-vessel dimension ratio.
+  Geometry-only; may belong upstream in VORTEX (STL/mesh metric) rather than in
+  vortex-cfd's CFD post-processing — needs a scoping decision before implementation.
+- **OSI** — already implemented (Phase C2); flagged in the research as the primary
+  size-specific discriminant, so existing validation should hold up.
+- **High Shear Concentration Ratio (HSCR)** and **Wall Shear Stress Divergence
+  (WSSD)** — local WSS concentration/traction metrics, computable from the existing
+  `wallShearStress` field on `aneurysm_sac` (likely a `pvbatch` gradient job, same
+  family as the deferred WSSG work in Phase C2/C3).
+- **Oscillatory Velocity Index (OVI)** — 3D flow-instability analogue of OSI, needs a
+  velocity-field (not just wall-field) time-series analysis.
+- **Non-Sphericity Index (NSI) / Undulation Index (UI)** — morphological, same
+  upstream-vs-local scoping question as SR.
+- **Flow Complexity Ratio (FCR)** — qualitative jet-concentration/vortex-count metric;
+  needs a concrete quantitative definition before implementation.
+
+**Open question carried into this phase:** several candidates (SR, NSI, UI) are pure
+mesh/STL geometry metrics with no CFD dependency — decide whether they're computed in
+vortex-cfd (post-processing the STL/mesh already on hand) or upstream in VORTEX, to
+avoid duplicating geometry logic across the two projects.
 
 ---
 
@@ -428,11 +479,16 @@ Phase C3 milestone note above). To resume:
 2. Fix `neck_peak_flow_rate_m3s` peak-by-magnitude (BUG-011).
 3. Clip the neck sampling plane to the orifice and verify in ParaView (CAVEAT-012).
 4. Un-comment the neck block in `controlDict.j2` and `postprocess.py`, re-validate on a real case,
-   then resume the deferred **WSSG + KEL pvbatch** work (`vortexcfd_biomarkers_plan.md` §6).
+   then resume the deferred **WSSG + KEL pvbatch** work (`docs/planning/vortexcfd_biomarkers_plan.md` §6).
 
-**Deferred — WSSG + KEL (pvbatch).** See Phase C2 notes and `vortexcfd_biomarkers_plan.md` §6.
+**Deferred — WSSG + KEL (pvbatch).** See Phase C2 notes and `docs/planning/vortexcfd_biomarkers_plan.md` §6.
 
-**After validation:** Phase B (Womersley inlet profile) or pvbatch WSSG/KEL script, whichever is more urgent for the paper.
+**After validation, roadmap order is: Phase C3 → Phase C4 (Womersley inlet, see
+`docs/planning/fable_womersley_plan.md`) → Phase D (extensions) → Phase E (extended
+biomarker suite, see `docs/planning/Biomarcadores_candidatos.md`).** Womersley is
+prioritised directly after the neck-metrics fix because it's required for
+publication-grade results; the WSSG/KEL pvbatch work (deferred from C2) can be picked
+up opportunistically alongside C4 since both touch pvbatch/gradient tooling.
 
 ---
 
@@ -445,7 +501,7 @@ Phase C3 milestone note above). To resume:
 | 2026-05-29 | Phase A validation (partial): pytest confirmed 99/99 pass on Linux in vortex-aneurysm env. Fixed smoke_test.sh (OUT_DIR/STL_DIR/REPO_ROOT not exported — Python subprocess couldn't read them via os.environ). Smoke test PASSED with real VMTK STLs. OpenFOAM v2406 confirmed at standard path. Full mesher+solver run not yet executed. |
 | 2026-05-30 | Phase A fully validated on Kubuntu desktop (Ryzen 5 5600X, OpenFOAM v2406). Fixed 6 bugs during first real run (see Section 5). Key fixes: run-cfd.sh conda/venv detection, `-m vortex_cfd` entry point, background patch in 0/U and 0/p, div(nuEff) in fvSchemes, snappyHexMesh serial-only workaround for v2406 segfault, locationInMesh replaced with inlet-centroid method. Velocity field confirmed inside vessel lumen in ParaView. **Phase A COMPLETE.** |
 | 2026-06-04 | Phase C implemented and fully validated on a real patient geometry (OpenFOAM v2406, 6 cores, 3 cycles). `metrics_report.json`: TAWSS mean 9.83 Pa, OSI mean 0.019, low-WSS area 0.17%, high-OSI area 0.84% — all clinically plausible. `wallShearStress` confirmed visible in ParaView with correct pulsatile temporal behaviour. Also fixed `run-cfd.sh` conda env detection (base env / space-in-path bugs). **Phase C COMPLETE.** |
-| 2026-06-06 | Phase C2 implemented (branch `aneurysm_dome_biomarkers`): two-patch wall mode (aneurysm_sac + parent_vessel), `--legacy-no-aneurysm` fallback flag, neck-plane function objects, normalised WSS, sac pressure metrics, neck flow rate. 8 source files + 3 test files updated. New unit tests (pure numpy/pyvista, no OpenFOAM). Pending real-case validation with updated VORTEX output. WSSG + KEL deferred to pvbatch script (see `vortexcfd_biomarkers_plan.md` §6). |
+| 2026-06-06 | Phase C2 implemented (branch `aneurysm_dome_biomarkers`): two-patch wall mode (aneurysm_sac + parent_vessel), `--legacy-no-aneurysm` fallback flag, neck-plane function objects, normalised WSS, sac pressure metrics, neck flow rate. 8 source files + 3 test files updated. New unit tests (pure numpy/pyvista, no OpenFOAM). Pending real-case validation with updated VORTEX output. WSSG + KEL deferred to pvbatch script (see `docs/planning/vortexcfd_biomarkers_plan.md` §6). |
 | 2026-06-10 | Phase C2 first real run on updated VORTEX output. Fixed BUG-007 (`surfaceFieldValue` FOs used invalid ESI v2406 syntax — `surfaceType`/`patches`/missing `writeFields`/bad plane form — verified correct keys against installed v2406 caseDicts + source; neck flux `sum`→`areaNormalIntegrate`) and BUG-008 (parser read `surface_fieldValue.dat`, actual is `surfaceFieldValue.dat`). Also: `case_builder` now accepts `output_neck_plane.json` and scales the neck origin mm→m; added `from __future__ import annotations` across modules for Python 3.9 (vortex-aneurysm conda env); `requires-python >=3.9`. Pipeline ran to completion through the solver. Test suite 139/140 (the 1 failure is the pre-existing pyvista `locationInMesh` fixture artefact). Remaining: eyeball `metrics_report.json` values + ParaView patches. |
 | 2026-06-13 | Restored BUG-007/008 + Python-3.9 LLM.md docs that the Ford commit (`ab6a2f6`, made on a stale checkout) had reverted — the *code* fixes were never lost, only the documentation. Added default STL naming scheme + auto-labelling for unattended batch runs (`patch_labeller._auto_label`): `aneurysm.stl`/`wall.stl`/`inlet.stl`/`outlet_<N>.stl` auto-label with no prompt when all files match; any mismatch falls back to prompting all files (D-006). 11 new tests in `tests/test_patch_labeller.py`; suite 151 pass + 1 pre-existing fixture failure. |
 | 2026-06-13 (pm) | Batch of 3 patient runs (AA_010, AA_004, AA_011) at 0.30 m/s ICA inlet, 3 cycles, 6 cores, postprocess. AA_010/AA_004 completed; AA_011 false-aborted at checkMesh (BUG-009: skewness 6.66 > old gate of 4, though mesh was fine). Researched mesh-quality thresholds (OpenFOAM guide + CFD Support: skewness ≤ 20 usable; aneurysm-CFD lit PMC5469453). Raised skewness gate 4 → 20 (= OpenFOAM `maxBoundarySkewness`) and fixed the latent non-ortho regex that never matched checkMesh output. Added `tests/test_runner.py` (5 tests). Suite 156 pass + 1 pre-existing fixture failure. AA_011 not yet re-run (user will do it). |
