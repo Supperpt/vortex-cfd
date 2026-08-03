@@ -274,8 +274,9 @@ aneurysm rupture**, beyond the current TAWSS/OSI/normalised-WSS/sac-pressure set
 
 Candidate metrics, roughly in order of expected significance for this population:
 - **Size Ratio (SR)** — morphological, aneurysm/parent-vessel dimension ratio.
-  Geometry-only; may belong upstream in VORTEX (STL/mesh metric) rather than in
-  vortex-cfd's CFD post-processing — needs a scoping decision before implementation.
+  **Out of scope for vortex-cfd** — pure STL/mesh geometry metric, no CFD dependency.
+  Tracked upstream: `Supperpt/VORTEX` milestone "Compute morphological rupture-risk
+  biomarkers (SR, NSI, UI)" (#2).
 - **OSI** — already implemented (Phase C2); flagged in the research as the primary
   size-specific discriminant, so existing validation should hold up.
 - **High Shear Concentration Ratio (HSCR)** and **Wall Shear Stress Divergence
@@ -284,15 +285,15 @@ Candidate metrics, roughly in order of expected significance for this population
   family as the deferred WSSG work in Phase C2/C3).
 - **Oscillatory Velocity Index (OVI)** — 3D flow-instability analogue of OSI, needs a
   velocity-field (not just wall-field) time-series analysis.
-- **Non-Sphericity Index (NSI) / Undulation Index (UI)** — morphological, same
-  upstream-vs-local scoping question as SR.
+- **Non-Sphericity Index (NSI) / Undulation Index (UI)** — morphological. **Out of
+  scope for vortex-cfd**, same as SR — tracked in `Supperpt/VORTEX` milestone #2.
 - **Flow Complexity Ratio (FCR)** — qualitative jet-concentration/vortex-count metric;
   needs a concrete quantitative definition before implementation.
 
-**Open question carried into this phase:** several candidates (SR, NSI, UI) are pure
-mesh/STL geometry metrics with no CFD dependency — decide whether they're computed in
-vortex-cfd (post-processing the STL/mesh already on hand) or upstream in VORTEX, to
-avoid duplicating geometry logic across the two projects.
+**Scoping decided (2026-08-03):** SR, NSI, and UI are pure mesh/STL geometry metrics
+with no CFD dependency, so they're computed upstream in `Supperpt/VORTEX` (milestone
+#2) rather than in vortex-cfd, to avoid duplicating geometry logic across the two
+projects. This phase's scope is therefore HSCR, WSSD, OVI, and FCR.
 
 ---
 
