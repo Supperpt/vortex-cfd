@@ -553,17 +553,59 @@ See Phase C3. The clinical neck inflow rate is a *positive-part* integral, `Σ A
 **Phase C2 is VALIDATED and SHIPPED in v0.1.0 (2026-06-17).** Public release lives on `main`;
 ongoing work (and these dev docs) on `development`. See the repo's two-branch topology.
 
+**Branches right now:** `main` (public release) → `development` (main + these dev docs) →
+`phase-c` (C3 + C4, 11 commits ahead of `development`, awaiting the validation below).
+
 **Phase C3 and C4 are IMPLEMENTED on branch `phase-c` (2026-08-04), not yet merged.**
 Both are fully unit-tested but neither has been run against a real solved case.
 
+> **Read this before the steps below — the flag is not the switch.**
+> `--neck-metrics` **already works**. The code is live and wired; pass the flag and you
+> get real computed numbers today. Nothing is waiting on the "switch".
+>
+> "Flipping `PHASE-C3-VALIDATION-SWITCH`" only changes the **default** so the flag no
+> longer has to be typed, and relabels `"status": "experimental_unvalidated"` to
+> `"validated"`. It is a policy change, not a functional one.
+>
+> The gate exists because v1.0.0 shipped exactly this failure: neck values were emitted
+> **by default**, looked entirely plausible, and were actually measuring parent-vessel
+> throughput (CAVEAT-012). Opt-in plus an explicit `experimental_unvalidated` status
+> means the numbers cannot be mistaken for the validated TAWSS/OSI outputs until
+> somebody has actually looked at the disc.
+
+**The two validations are independent.** Neck metrics are pure post-processing — they
+read saved snapshots and do not care which inlet BC produced them. Womersley changes
+the inlet BC, so it changes the solution and needs its own solve.
+
 **Next step: validate on a real case, then merge `phase-c` → `development`.**
-1. `--postprocess-only <case> --neck-metrics` on a solved aneurysm case; check
-   `validation.net_flux_near_zero` and confirm the disc in ParaView (full procedure in
-   the Phase C3 section above).
-2. A 3-cycle `--womersley` run: confirm the inlet flux tracks the waveform across
-   **all** cycles (this is what the multi-cycle boundaryData fix addresses) and that
-   WSS/OSI stay plausible against the parabolic baseline.
-3. Flip `# PHASE-C3-VALIDATION-SWITCH` in `cli.py`, then merge.
+No solved case existed when this was written, so start by producing one.
+
+1. **Run A — baseline (parabolic inlet), validates C3.**
+   ```bash
+   ./run-cfd.sh --stl-dir <stls> --mean-velocity 0.4 --postprocess --neck-metrics
+   ```
+   Gives TAWSS/OSI *and* the neck numbers in one pass. Check
+   `validation.net_flux_near_zero` in `metrics_report.json`, then confirm the disc in
+   ParaView (full procedure in the Phase C3 section above). If the disc over-reaches,
+   edit `radius_m` in `neck_plane_resolved.json` and re-run **only**
+   `--postprocess-only <case> --neck-metrics` — no re-solve needed.
+
+2. **Run B — same geometry with `--womersley`, validates C4.**
+   ```bash
+   ./run-cfd.sh --stl-dir <stls> --mean-velocity 0.4 --womersley --postprocess
+   ```
+   Confirm the inlet flux tracks the waveform across **all** cycles (this is what the
+   multi-cycle boundaryData fix addresses — a regression here would show as the inlet
+   freezing after cycle 1) and that WSS/OSI stay plausible against Run A. Run A is the
+   baseline that makes this comparison meaningful, which is why it comes first.
+
+3. **Flip the switch and merge.** In `cli.py` at `# PHASE-C3-VALIDATION-SWITCH`, change
+   `default=False` to `default=True`; in `postprocess._neck_report_block` change
+   `"experimental_unvalidated"` to `"validated"`; drop the EXPERIMENTAL notes from
+   `README.md`. Then merge `phase-c` → `development`.
+
+   If validation *fails*, do not flip: the branch is still mergeable with the flag left
+   off, since the default output is byte-identical to v1.0.0.
 
 **Deferred — WSSG + KEL (pvbatch).** See Phase C2 notes and
 `docs/planning/vortexcfd_biomarkers_plan.md` §6. C3 leaves KEL one line away: it is
@@ -593,5 +635,6 @@ see `docs/planning/Biomarcadores_candidatos.md`).** Note the geometry-only bioma
 | 2026-06-23 | Code review. Fixed BUG-014: `scaling._any_in_mm` mm/m detection used distance-from-origin (`max(abs(bounds))`) instead of bounding-box extent — translation-variant. Reassessed the review's "critical" severity → not a live bug for head-DICOM data (origin-distance and extent give identical verdicts for cerebral-aneurysm scans), fixed as hardening. Confirmed via git that the function was never previously altered. Added regression test (metre mesh offset +1.5 m → not flagged); scaling suite 15 pass. |
 | 2026-06-12 | Replaced the synthetic hand-tuned default inlet waveform with the literature-standard **Ford et al. (2005)** ICA archetype. Digitised the paper's Table 2 ICA feature points → periodic cubic spline (pure-numpy generator `data/generate_ica_ford2005.py`) → bundled `data/ica_ford2005.csv` (100 pts, mean=1, peak 1.657 @ t_norm 0.12 matching P1=1.66). `waveform.py` now loads the bundled CSV by default; `--waveform` still overrides. Confirmed `--mean-velocity` is the cycle-averaged velocity (Q_mean = U_mean × A_inlet). Updated cli help text, `pyproject.toml` package-data, and `tests/test_waveform.py` (Ford feature-timing/amplitude assertions). 140 pass, 1 pre-existing fixture failure. |
 | 2026-07-02 | Code review (Fable). Confirmed the DeepSeek findings were genuinely addressed (constants module, `cycles>=2` guard, atexit temp cleanup, area-weighted-mean zero guard, non-ortho regex). Fixed two new bugs: **BUG-015** (`--postprocess-only` silently assumed 3 cycles — `--cycles` now defaults to `None`, full run substitutes 3, so standalone post-processing derives the window from the case data) and **BUG-016** (`run-cfd.sh` hardcoded `~/miniconda3`; now discovers the conda base via `conda info --base` + fallback list, fixing this machine's miniforge setup). Added `tests/test_cli.py` (3 tests). Refreshed the stale Python-3.9 note (env is now 3.10, `requires-python >=3.10`). Suite 162 pass + 1 xfail. Follow-up: cleaned up the three minor `postprocess.py` polish items (dead TAWSS lower-bound check, coupled parent-vessel weights, earliest-only surfaceFieldValue dir parsing → merge all restart dirs) + regression test. Suite 163 pass + 1 xfail. |
+| 2026-08-03 | Repo/roadmap housekeeping, no code changes. Moved all long-form planning docs into `docs/planning/` (`explanation.md`, `vortexcfd_biomarkers_plan.md`, plus `fable_womersley_plan.md` and `Biomarcadores_candidatos.md` promoted from gitignored scratch to tracked); deleted `fable_review.md` as superseded by this file's 2026-07-02 entry. Opened two GitHub milestones: **Phase C4 — Womersley inlet profile** (#5) and **Phase E — Extended rupture-risk biomarker suite** (#6, from the literature review in `docs/planning/Biomarcadores_candidatos.md`). Resolved the Phase E scoping question: SR/NSI/UI are pure STL geometry with no CFD dependency, so they move upstream to `Supperpt/VORTEX` milestone #2 rather than duplicating geometry logic here; Phase E narrows to HSCR, WSSD, OVI, FCR. Roadmap order fixed as C3 → C4 → D → E. |
 | 2026-08-04 | **Phase C3 implemented** on branch `phase-c`. Closed BUG-010/011/CAVEAT-012 by redesign rather than repair: deleted the neck `surfaceFieldValue` FOs entirely, because the clinical *neck inflow rate* is a positive-part integral (`Σ A·max(U·n̂,0)`) that no FO operation can express, and `areaNormalIntegrate` measures net flux, which averages to ~0 through a sealed sac neck. New leaf module `vortex_cfd/neck.py` fits the orifice to `aneurysm_sac.stl`'s open boundary loop by SVD (planarity 4.8e-7 measured) and slices the volume `U` snapshots. Key hardening: the normal's **sign is derived geometrically** (oriented toward the sac), never from `neck_plane.json`, whose convention is undocumented and whose normal was never normalised — a flipped normal would have reported outflow as inflow, undetectably. Radius is `r_eff` not `r_max` (biases the disc small; over-inclusion re-creates CAVEAT-012). Disc clipped with `clip_scalar` (−1.3 % area error vs +3.4 % for a cell-centre mask). Added `validation.net_to_inflow_ratio` so CAVEAT-012 is now self-detecting without ParaView. Parser hardened: strips `()` and **warns on malformed rows** instead of `except: pass` — the silence was the worse half of BUG-010. Gated behind `--neck-metrics` (default off, `# PHASE-C3-VALIDATION-SWITCH`) since no solved case was available; default `metrics_report.json` is byte-identical to v1.0.0. Suite 163 → 212 pass + 1 xfail. |
 | 2026-08-04 (cont.) | **Phase C4 implemented** on branch `phase-c`. Re-applied the Womersley inlet from the abandoned `phase_b_womersley_inlet` branch onto current code, dropping everything unrelated it bundled (print→logging migration — would have deleted `run_log.md` and the BUG-009 regex fallback — plus `--dry-run`, flow-rate validation, snappy retry). Fixed the prototype's real defect: `timeVaryingMappedFixedValue` has no `outOfBounds repeat`, so its single-cycle boundaryData would have **frozen the inlet** at the cycle-1 end value for every later cycle — silent and plausible-looking. Data is now tiled across `cycles·T` with a terminal sample. `_location_in_mesh` promoted to `_inlet_geometry` (centroid/normal/radius/interior — it already computed all four); `build_case` returns `(case_dir, inlet_params)`. boundaryData written between snappyHexMesh and checkMesh, and **aborts** on failure (an unreadable inlet BC would waste hours of solve). Verified the area-mean identity by radial quadrature: 1.0000 mean, ±2 % across the cycle at 8 harmonics. Cost 301 dirs / 7 MB for 3 cycles × 1200 faces. Added `scipy>=1.11`. Suite 212 → 261 pass + 1 xfail. Neither C3 nor C4 has been run against a real OpenFOAM case — that is the merge gate. |
