@@ -61,3 +61,58 @@ def test_log_init_and_append_write_markdown(tmp_path, monkeypatch):
     assert "# vortex-cfd run log" in text
     assert "full pipeline" in text
     assert "## blockMesh — OK" in text
+
+
+# ---------------------------------------------------------------------------
+# Womersley boundaryData step
+# ---------------------------------------------------------------------------
+
+class TestWomersleyBoundaryData:
+    """
+    The boundaryData step must fail loudly and early. Unlike a post-processing
+    diagnostic, a missing constant/boundaryData leaves the solver with an inlet
+    BC it cannot read -- cheaper to abort now than hours into the solve.
+    """
+
+    def _params(self):
+        import numpy as np
+        from vortex_cfd.waveform import load_waveform
+        return {
+            "centroid": np.zeros(3),
+            "normal": np.array([0.0, 0.0, 1.0]),
+            "radius": 0.003,
+            "mean_velocity": 0.4,
+            "waveform": load_waveform(None),
+            "nu": 3.3e-6,
+            "cycles": 2,
+        }
+
+    def test_missing_inlet_params_aborts(self, tmp_path, capsys):
+        with pytest.raises(SystemExit) as exc:
+            runner._write_womersley_boundary_data(tmp_path, None)
+        assert exc.value.code == 1
+        assert "requires inlet geometry" in capsys.readouterr().err
+
+    def test_unreadable_mesh_aborts(self, tmp_path, capsys):
+        """No .foam file — must exit rather than propagate a raw traceback."""
+        with pytest.raises(SystemExit) as exc:
+            runner._write_womersley_boundary_data(tmp_path, self._params())
+        assert exc.value.code == 1
+        assert "could not write Womersley boundaryData" in capsys.readouterr().err
+
+    def test_writes_boundary_data_for_the_whole_run(self, tmp_path, monkeypatch):
+        import numpy as np
+        from vortex_cfd.waveform import T_CYCLE
+
+        faces = np.column_stack([
+            np.linspace(0.0, 0.0025, 12), np.zeros(12), np.zeros(12)])
+        monkeypatch.setattr(runner, "_inlet_face_centers", lambda *a, **k: faces)
+
+        runner._write_womersley_boundary_data(tmp_path, self._params())
+
+        bd = tmp_path / "constant" / "boundaryData" / "inlet"
+        assert (bd / "points").exists()
+        written = sorted(float(p.parent.name) for p in bd.glob("*/U"))
+        # cycles=2 in _params, so the data must span two full cycles.
+        assert max(written) >= 2 * T_CYCLE - 1e-9
+        assert len(written) == 2 * 100 + 1

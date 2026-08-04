@@ -33,6 +33,7 @@ from pathlib import Path
 import numpy as np
 import pyvista as pv
 
+from . import neck
 from .waveform import T_CYCLE
 from .constants import RHO, NU
 
@@ -271,10 +272,23 @@ def _detect_patches(case_dir: Path) -> tuple[str | None, str]:
     return None, "wall"
 
 
+def _reduce_vector(components: list[float], reduce: str) -> float:
+    """Collapse a vector FO value to a scalar according to ``reduce``."""
+    if reduce == "magnitude":
+        return float(np.linalg.norm(components))
+    if reduce.startswith("component:"):
+        idx = int(reduce.split(":", 1)[1])
+        return float(components[idx])
+    raise ValueError(
+        f"unknown vector reduction '{reduce}'; expected 'magnitude' or 'component:N'"
+    )
+
+
 def _read_surface_field_value(
     case_dir: Path,
     fo_name: str,
     t_start: float,
+    reduce: str = "magnitude",
 ) -> list[tuple[float, float]]:
     """
     Parse a surfaceFieldValue postProcessing output file.
@@ -282,9 +296,15 @@ def _read_surface_field_value(
     Reads from postProcessing/<fo_name>/<startTime>/surfaceFieldValue.dat.
     Returns [(time, value), ...] for times >= t_start.
 
-    For scalar fields: value is the scalar.
-    For vector fields (3 components after time column): value is the magnitude.
-    Lines beginning with '#' are skipped as comments.
+    Scalar fields yield the scalar directly.  Vector fields are written by
+    OpenFOAM as a *parenthesised* token ``(vx vy vz)``; ``reduce`` decides how
+    they collapse to a scalar — ``"magnitude"`` (default) or ``"component:N"``.
+    Choose deliberately: magnitude discards the sign, which for a flux quantity
+    silently turns outflow into inflow.
+
+    Lines beginning with '#' are skipped as comments.  Rows that cannot be
+    parsed are counted and warned about rather than dropped silently, since a
+    format mismatch otherwise surfaces only as an unexplained null metric.
     """
     pp_dir = Path(case_dir) / "postProcessing" / fo_name
     if not pp_dir.exists():
@@ -309,28 +329,128 @@ def _read_surface_field_value(
         dat_path = tdir / "surfaceFieldValue.dat"
         if not dat_path.exists():
             continue
+        n_bad = 0
         with dat_path.open() as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
-                parts = line.split()
+                # OpenFOAM brackets vector values as "(vx vy vz)"; strip the
+                # parentheses before parsing, or every vector row is dropped.
+                parts = line.replace("(", " ").replace(")", " ").split()
                 if len(parts) < 2:
+                    n_bad += 1
                     continue
                 try:
                     t = float(parts[0])
-                    if t < t_start - 1e-9:
-                        continue
-                    if len(parts) == 2:
-                        merged[t] = float(parts[1])
-                    elif len(parts) == 4:
-                        # Vector: (time, vx, vy, vz) — report magnitude.
-                        vx, vy, vz = float(parts[1]), float(parts[2]), float(parts[3])
-                        merged[t] = float(np.sqrt(vx**2 + vy**2 + vz**2))
+                    values = [float(v) for v in parts[1:]]
                 except ValueError:
-                    pass
+                    n_bad += 1
+                    continue
+                if t < t_start - 1e-9:
+                    continue
+                if len(values) == 1:
+                    merged[t] = values[0]
+                elif len(values) == 3:
+                    merged[t] = _reduce_vector(values, reduce)
+                else:
+                    n_bad += 1
+        if n_bad:
+            warnings.warn(
+                f"{n_bad} unparsable row(s) in {dat_path} — the function object "
+                "output format may have changed; the affected times are missing "
+                "from the metric.",
+                stacklevel=2,
+            )
 
     return [(t, merged[t]) for t in sorted(merged)]
+
+
+def _neck_report_block(
+    case_dir: Path,
+    t_start: float,
+    enabled: bool,
+) -> str | dict:
+    """
+    The ``neck_metrics`` entry of the report.
+
+    Three states, and the default must stay the plain string so existing
+    consumers of metrics_report.json see no change until the disc has been
+    confirmed in ParaView:
+      * disabled          -> "disabled_pending_validation"
+      * enabled + fitted  -> the metrics dict
+      * enabled, no fit   -> {"status": "unavailable", "reason": ...}
+    """
+    if not enabled:
+        return "disabled_pending_validation"
+
+    plane = neck.load_neck_plane(case_dir)
+    if plane is None:
+        resolved = case_dir / neck.RESOLVED_FILENAME
+        reason = (
+            f"{neck.RESOLVED_FILENAME} records no usable orifice "
+            "(the sac STL could not be fitted at build time)."
+            if resolved.exists() else
+            f"{neck.RESOLVED_FILENAME} not found in the case directory — it is "
+            "written by build_case for two-patch (aneurysm) cases only."
+        )
+        warnings.warn(f"neck metrics unavailable: {reason}", stacklevel=2)
+        return {"status": "unavailable", "reason": reason}
+
+    # Nothing below may raise: a neck metric is a diagnostic, and must never
+    # discard a solve that has already produced valid WSS/OSI results.
+    try:
+        times = [t for t in available_times(case_dir) if t >= t_start - 1e-9]
+        if not times:
+            raise ValueError(f"no snapshots at or after t={t_start:.4g} s")
+        rows = neck.read_neck_series(case_dir, times, plane)
+    except (FileNotFoundError, KeyError, ValueError) as e:
+        reason = f"could not sample the neck plane: {e}"
+        warnings.warn(f"neck metrics unavailable: {reason}", stacklevel=2)
+        return {"status": "unavailable", "reason": reason}
+
+    t = np.array([r["time"] for r in rows], dtype=float)
+    w = _time_weights(t)
+    wsum = w.sum()
+
+    def _wmean(key: str) -> float:
+        return float((w * np.array([r[key] for r in rows])).sum() / wsum)
+
+    inflow = np.array([r["inflow_rate_m3s"] for r in rows])
+    net = np.array([r["net_flux_m3s"] for r in rows])
+    mean_inflow = _wmean("inflow_rate_m3s")
+    mean_net = _wmean("net_flux_m3s")
+
+    # A sealed sac must pass ~zero NET volume per cycle: inflow and outflow
+    # cancel. A ratio near 1 means the disc is cutting the parent vessel and is
+    # measuring throughput, i.e. CAVEAT-012 has not actually been fixed.
+    ratio = abs(mean_net) / mean_inflow if mean_inflow > 0 else float("nan")
+
+    plane_block = plane.to_dict()
+    try:
+        stored = json.loads((case_dir / neck.RESOLVED_FILENAME).read_text())
+        plane_block["cross_check"] = stored.get("cross_check")
+    except (json.JSONDecodeError, OSError):
+        plane_block["cross_check"] = None
+
+    return {
+        "status": "experimental_unvalidated",
+        "inflow_rate_m3s": {"mean": mean_inflow, "peak": float(inflow.max())},
+        "inflow_rate_mls": {"mean": mean_inflow * 1e6, "peak": float(inflow.max()) * 1e6},
+        "net_flux_m3s": {"mean": mean_net, "peak_abs": float(np.abs(net).max())},
+        "peak_velocity_ms": float(max(r["peak_velocity_ms"] for r in rows)),
+        "peak_inflow_velocity_ms": float(max(r["peak_inflow_velocity_ms"] for r in rows)),
+        "disc_area_m2": _wmean("disc_area_m2"),
+        "n_disc_cells": int(rows[0]["n_cells"]),
+        "n_snapshots": len(rows),
+        "plane": plane_block,
+        "validation": {
+            "net_to_inflow_ratio": float(ratio),
+            "net_flux_near_zero": bool(ratio < 0.2),
+            "loop_planar": bool(plane.planarity < neck.PLANARITY_WARN),
+            "disc_resolved": bool(rows[0]["n_cells"] >= neck.MIN_DISC_CELLS),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +463,7 @@ def compute_metrics(
     t_cycle: float = T_CYCLE,
     rho: float = RHO,
     nu: float = NU,
+    neck_metrics: bool = False,
 ) -> dict:
     """
     Compute TAWSS / OSI over the last cardiac cycle and write
@@ -451,27 +572,11 @@ def compute_metrics(
         else:
             report["sac_pressure_peak_pa"] = None
 
-        # Neck-flow metrics DISABLED for the 0.1.0 release (see CAVEAT-012 /
-        # BUG-010 / BUG-011 in the development branch docs).  The neck
-        # surfaceFieldValue function objects are commented out in
-        # templates/system/controlDict.j2 because the infinite sampling plane
-        # integrates the whole parent-vessel cross-section rather than the sac
-        # orifice, and the flux/peak-velocity parsing is unreliable.  The
-        # validated outputs are TAWSS, OSI, normalised WSS and sac pressure.
-        # To re-enable: fix the FOs (clip plane to neck, maxMag, peak-by-
-        # magnitude, verify in ParaView) and restore the block below.
-        report["neck_metrics"] = "disabled_pending_validation"
-        #
-        # flux_rows = _read_surface_field_value(
-        #     case_dir, "surfaceFieldValue_neck_flux", t_start)
-        # peak_vel_rows = _read_surface_field_value(
-        #     case_dir, "surfaceFieldValue_neck_peak_vel", t_start)
-        # if flux_rows:
-        #     vals = [v for _, v in flux_rows]
-        #     report["neck_mean_flow_rate_m3s"] = float(np.mean(vals))
-        #     report["neck_peak_flow_rate_m3s"] = float(max(vals, key=abs))
-        # if peak_vel_rows:
-        #     report["neck_peak_velocity_ms"] = float(max(v for _, v in peak_vel_rows))
+        # Neck inflow metrics are computed in vortex_cfd/neck.py by slicing the
+        # volume U field at the fitted orifice.  Still opt-in: the disc has not
+        # been confirmed against a real case in ParaView, so the default output
+        # is unchanged.  See the flip-the-switch procedure in LLM.md.
+        report["neck_metrics"] = _neck_report_block(case_dir, t_start, neck_metrics)
 
     report["generated"] = datetime.now().isoformat(timespec="seconds")
 

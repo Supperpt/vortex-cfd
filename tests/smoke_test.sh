@@ -76,7 +76,7 @@ from vortex_cfd.case_builder import build_case
 
 scaled   = scale_stls(stl_paths, labels)
 waveform = load_waveform(None)
-case_dir = build_case(
+case_dir, _ = build_case(
     scaled_stls=scaled, labels=labels, cycles=cycles,
     mean_velocity=u_mean, waveform=waveform, cores=cores, out_dir=str(out_dir),
 )

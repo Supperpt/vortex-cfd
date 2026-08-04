@@ -11,6 +11,7 @@ from vortex_cfd.case_builder import (
     _background_cell_counts,
     _bbox_with_buffer,
     _inlet_area,
+    _inlet_geometry,
     _location_in_mesh,
     _waveform_table,
     build_case,
@@ -108,6 +109,40 @@ class TestInletArea:
 # _location_in_mesh
 # ---------------------------------------------------------------------------
 
+class TestInletGeometry:
+    def test_returns_centroid_normal_radius_interior(self, scaled_stls_m):
+        centroid, normal, radius, interior = _inlet_geometry(scaled_stls_m["inlet"])
+        assert centroid.shape == (3,)
+        assert normal.shape == (3,)
+        assert radius > 0
+        assert len(interior) == 3
+
+    def test_normal_is_unit_length(self, scaled_stls_m):
+        _, normal, _, _ = _inlet_geometry(scaled_stls_m["inlet"])
+        assert np.linalg.norm(normal) == pytest.approx(1.0)
+
+    def test_radius_matches_the_cap_area(self, scaled_stls_m):
+        # Equivalent radius sqrt(A/pi) must agree with the triangulated area.
+        _, _, radius, _ = _inlet_geometry(scaled_stls_m["inlet"])
+        area = _inlet_area(scaled_stls_m["inlet"])
+        assert radius == pytest.approx(np.sqrt(area / np.pi), rel=1e-9)
+
+    def test_interior_point_is_one_radius_along_the_normal(self, scaled_stls_m):
+        centroid, normal, radius, interior = _inlet_geometry(scaled_stls_m["inlet"])
+        np.testing.assert_allclose(np.asarray(interior),
+                                   centroid + normal * radius, rtol=1e-9)
+
+    def test_centroid_lies_on_the_cap(self, scaled_stls_m):
+        # The inlet fixture is a disc at z = 0.
+        centroid, _, _, _ = _inlet_geometry(scaled_stls_m["inlet"])
+        assert centroid[2] == pytest.approx(0.0, abs=1e-9)
+
+    def test_location_in_mesh_is_the_same_interior_point(self, scaled_stls_m):
+        """The wrapper must stay consistent with the refactored helper."""
+        _, _, _, interior = _inlet_geometry(scaled_stls_m["wall"])
+        assert _location_in_mesh(scaled_stls_m["wall"]) == interior
+
+
 class TestLocationInMesh:
     def test_returns_three_floats(self, scaled_stls_m):
         loc = _location_in_mesh(scaled_stls_m["wall"])
@@ -193,7 +228,7 @@ REQUIRED_FILES = [
 @pytest.fixture
 def built_case(scaled_stls_m, tmp_path):
     wf = load_waveform(None)
-    return build_case(
+    case_dir, _ = build_case(
         scaled_stls=scaled_stls_m,
         labels={},
         cycles=1,
@@ -202,13 +237,14 @@ def built_case(scaled_stls_m, tmp_path):
         cores=2,
         out_dir=str(tmp_path),
     )
+    return case_dir
 
 
 @pytest.fixture
 def built_case_pp(scaled_stls_m, tmp_path):
     """Case built with postprocess=True → controlDict gets the function objects."""
     wf = load_waveform(None)
-    return build_case(
+    case_dir, _ = build_case(
         scaled_stls=scaled_stls_m,
         labels={},
         cycles=3,
@@ -218,6 +254,7 @@ def built_case_pp(scaled_stls_m, tmp_path):
         out_dir=str(tmp_path),
         postprocess=True,
     )
+    return case_dir
 
 
 class TestBuildCase:
@@ -326,7 +363,7 @@ class TestBuildCasePostprocess:
 def built_case_aneurysm(scaled_stls_aneurysm, stl_dir_aneurysm, tmp_path):
     """Case built in new two-patch mode (aneurysm_sac + parent_vessel)."""
     wf = load_waveform(None)
-    return build_case(
+    case_dir, _ = build_case(
         scaled_stls=scaled_stls_aneurysm,
         labels={},
         cycles=3,
@@ -337,6 +374,7 @@ def built_case_aneurysm(scaled_stls_aneurysm, stl_dir_aneurysm, tmp_path):
         postprocess=True,
         stl_source_dir=stl_dir_aneurysm,
     )
+    return case_dir
 
 
 class TestBuildCaseAneurysm:
@@ -389,19 +427,18 @@ class TestBuildCaseAneurysm:
         assert "surfaceFieldValue_sac_pressure_max" in text
 
     def test_controldict_neck_function_objects_disabled(self, built_case_aneurysm):
-        # Neck-flow metrics are DISABLED for the 0.1.0 release (commented out in
-        # controlDict.j2; see CAVEAT-012 / BUG-010 / BUG-011). Even with
-        # neck_plane.json present, the neck function objects must NOT be rendered
-        # as active dictionary entries.
+        # Neck metrics are computed in Python (vortex_cfd/neck.py), because a
+        # surfaceFieldValue FO cannot express the positive-part integral the
+        # inflow rate needs. Guards against reintroducing the FO approach.
         text = (built_case_aneurysm / "system" / "controlDict").read_text()
         assert "surfaceFieldValue_neck_flux" not in text
         assert "surfaceFieldValue_neck_peak_vel" not in text
 
     def test_controldict_no_neck_objects_when_no_neck_plane(
             self, scaled_stls_aneurysm, tmp_path):
-        """When neck_plane.json is absent, neck function objects must be omitted."""
+        """No neck function objects are emitted regardless of neck_plane.json."""
         wf = load_waveform(None)
-        case = build_case(
+        case, _ = build_case(
             scaled_stls=scaled_stls_aneurysm,
             labels={},
             cycles=3,
@@ -416,6 +453,17 @@ class TestBuildCaseAneurysm:
         assert "surfaceFieldValue_neck_flux" not in text
         assert "surfaceFieldValue_neck_peak_vel" not in text
 
+    def test_closed_sac_degrades_gracefully(self, built_case_aneurysm):
+        """
+        The stl_dir_aneurysm fixture builds the sac as a CLOSED sphere, so the
+        neck orifice cannot be fitted.  That must never fail a build — the
+        resolved file records why instead.
+        """
+        resolved = json.loads(
+            (built_case_aneurysm / "neck_plane_resolved.json").read_text())
+        assert resolved["status"] == "unavailable"
+        assert "closed surface" in resolved["reason"]
+
     def test_bbox_covers_both_wall_stls(self, built_case_aneurysm):
         ts = built_case_aneurysm / "constant" / "triSurface"
         sac = pv.read(str(ts / "aneurysm_sac.stl"))
@@ -423,3 +471,120 @@ class TestBuildCaseAneurysm:
         # parent_vessel is larger; combined bbox should be at least as large.
         text = (built_case_aneurysm / "system" / "blockMeshDict").read_text()
         assert "vertices" in text  # proxy: blockMeshDict was rendered
+
+
+# ---------------------------------------------------------------------------
+# build_case — aneurysm mode with an OPEN sac, so the neck orifice resolves
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def built_case_open_neck(scaled_stls_aneurysm_open_neck, stl_dir_aneurysm_open_neck,
+                         tmp_path):
+    wf = load_waveform(None)
+    case_dir, _ = build_case(
+        scaled_stls=scaled_stls_aneurysm_open_neck,
+        labels={},
+        cycles=3,
+        mean_velocity=0.4,
+        waveform=wf,
+        cores=2,
+        out_dir=str(tmp_path),
+        postprocess=True,
+        stl_source_dir=stl_dir_aneurysm_open_neck,
+    )
+    return case_dir
+
+
+class TestBuildCaseOpenNeck:
+    def test_resolved_neck_plane_written(self, built_case_open_neck):
+        resolved = json.loads(
+            (built_case_open_neck / "neck_plane_resolved.json").read_text())
+        assert "status" not in resolved          # i.e. it succeeded
+        assert resolved["radius_m"] > 0
+        assert resolved["n_loop_points"] > 10
+
+    def test_resolved_normal_is_unit(self, built_case_open_neck):
+        resolved = json.loads(
+            (built_case_open_neck / "neck_plane_resolved.json").read_text())
+        assert np.linalg.norm(resolved["normal"]) == pytest.approx(1.0)
+
+    def test_resolved_plane_sits_at_the_clip_height(self, built_case_open_neck):
+        resolved = json.loads(
+            (built_case_open_neck / "neck_plane_resolved.json").read_text())
+        # Fixture clips the sac at z = 0.002 m.
+        assert resolved["origin"] == pytest.approx([0.0, 0.0, 0.002], abs=1e-5)
+
+    def test_cross_check_against_neck_plane_json_agrees(self, built_case_open_neck):
+        resolved = json.loads(
+            (built_case_open_neck / "neck_plane_resolved.json").read_text())
+        assert resolved["cross_check"]["agrees"] is True
+
+    def test_legacy_mode_writes_no_resolved_plane(self, built_case):
+        assert not (built_case / "neck_plane_resolved.json").exists()
+
+
+class TestBuildCaseInletParams:
+    """build_case hands the inlet geometry to the runner for the Womersley step."""
+
+    def test_returns_case_dir_and_inlet_params(self, scaled_stls_m, tmp_path):
+        case_dir, params = build_case(
+            scaled_stls=scaled_stls_m, labels={}, cycles=2, mean_velocity=0.4,
+            waveform=load_waveform(None), cores=2, out_dir=str(tmp_path),
+        )
+        assert case_dir.is_dir()
+        assert set(params) == {"centroid", "normal", "radius", "mean_velocity",
+                               "waveform", "nu", "cycles"}
+
+    def test_inlet_params_carry_the_run_parameters(self, scaled_stls_m, tmp_path):
+        _, params = build_case(
+            scaled_stls=scaled_stls_m, labels={}, cycles=4, mean_velocity=0.33,
+            waveform=load_waveform(None), cores=2, out_dir=str(tmp_path),
+        )
+        assert params["mean_velocity"] == pytest.approx(0.33)
+        assert params["cycles"] == 4
+        assert params["radius"] > 0
+        assert np.linalg.norm(params["normal"]) == pytest.approx(1.0)
+
+
+class TestBuildCaseWomersley:
+    """The --womersley inlet must be opt-in; the default is unchanged."""
+
+    def _build(self, scaled, tmp_path, womersley):
+        case_dir, _ = build_case(
+            scaled_stls=scaled, labels={}, cycles=2, mean_velocity=0.4,
+            waveform=load_waveform(None), cores=2, out_dir=str(tmp_path),
+            womersley=womersley,
+        )
+        return (case_dir / "0" / "U").read_text()
+
+    def test_default_inlet_is_parabolic(self, scaled_stls_m, tmp_path):
+        text = self._build(scaled_stls_m, tmp_path, womersley=False)
+        assert "flowRateInletVelocity" in text
+        assert "timeVaryingMappedFixedValue" not in text
+
+    def test_womersley_inlet_replaces_the_flow_rate_table(self, scaled_stls_m, tmp_path):
+        text = self._build(scaled_stls_m, tmp_path, womersley=True)
+        assert "timeVaryingMappedFixedValue" in text
+        assert "flowRateInletVelocity" not in text
+
+    def test_womersley_inlet_sets_required_entries(self, scaled_stls_m, tmp_path):
+        text = self._build(scaled_stls_m, tmp_path, womersley=True)
+        assert "setAverage      false;" in text
+        assert "mapMethod       nearest;" in text
+
+    def test_wall_and_outlet_patches_are_unaffected(self, scaled_stls_m, tmp_path):
+        """Only the inlet block switches; the other patches must still render."""
+        # Separate out_dirs: case names are timestamped to the second, so two
+        # builds in the same second would collide.
+        plain = self._build(scaled_stls_m, tmp_path / "a", womersley=False)
+        wom = self._build(scaled_stls_m, tmp_path / "b", womersley=True)
+        for text in (plain, wom):
+            assert "noSlip" in text
+            assert "inletOutlet" in text
+            assert "background" in text
+
+    def test_aneurysm_mode_keeps_both_wall_patches(self, scaled_stls_aneurysm, tmp_path):
+        text = self._build(scaled_stls_aneurysm, tmp_path, womersley=True)
+        assert "aneurysm_sac" in text
+        assert "parent_vessel" in text
+        assert "timeVaryingMappedFixedValue" in text

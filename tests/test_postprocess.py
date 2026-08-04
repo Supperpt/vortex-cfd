@@ -16,6 +16,7 @@ import pytest
 from vortex_cfd.postprocess import (
     RHO,
     _detect_patches,
+    _neck_report_block,
     _read_surface_field_value,
     _time_weights,
     osi,
@@ -209,6 +210,55 @@ class TestReadSurfaceFieldValue:
         assert len(rows) == 1
         assert rows[0][1] == pytest.approx(5.0)
 
+    def test_parenthesised_vector_is_parsed(self, tmp_path):
+        """
+        BUG-010 regression. OpenFOAM writes vector values as "(vx vy vz)"; the
+        old parser split on whitespace and fed "(3.0" to float(), so every row
+        was silently dropped and the metric came out null.
+        """
+        content = """\
+            # Time  (Ux Uy Uz)
+            0.857   (3.0 4.0 0.0)
+            0.900   (0.0 0.0 5.0)
+        """
+        self._make_dat(tmp_path, "neck_vel", content)
+        rows = _read_surface_field_value(tmp_path, "neck_vel", t_start=0.0)
+        assert len(rows) == 2
+        assert rows[0][1] == pytest.approx(5.0)
+        assert rows[1][1] == pytest.approx(5.0)
+
+    def test_component_reduction_preserves_sign(self, tmp_path):
+        """Magnitude would report 2.5 for both rows, hiding the reversal."""
+        content = """\
+            # Time  (Ux Uy Uz)
+            0.857   (-2.5 0.0 0.0)
+            0.900   (2.5 0.0 0.0)
+        """
+        self._make_dat(tmp_path, "flux", content)
+        rows = _read_surface_field_value(tmp_path, "flux", t_start=0.0,
+                                         reduce="component:0")
+        assert rows[0][1] == pytest.approx(-2.5)
+        assert rows[1][1] == pytest.approx(2.5)
+
+    def test_malformed_rows_warn_instead_of_silently_dropping(self, tmp_path):
+        content = """\
+            # Time  value
+            0.857   1.0
+            0.900   not_a_number
+        """
+        self._make_dat(tmp_path, "fo", content)
+        with pytest.warns(UserWarning, match="unparsable row"):
+            rows = _read_surface_field_value(tmp_path, "fo", t_start=0.0)
+        assert len(rows) == 1
+
+    def test_unknown_reduction_raises(self, tmp_path):
+        content = """\
+            0.857   (1.0 2.0 3.0)
+        """
+        self._make_dat(tmp_path, "fo", content)
+        with pytest.raises(ValueError, match="unknown vector reduction"):
+            _read_surface_field_value(tmp_path, "fo", t_start=0.0, reduce="bogus")
+
     def test_comment_lines_skipped(self, tmp_path):
         content = """\
             # header line
@@ -261,3 +311,120 @@ class TestReadSurfaceFieldValue:
         rows = _read_surface_field_value(tmp_path, "fo", t_start=0.0)
         assert [t for t, _ in rows] == pytest.approx([0.500, 0.857, 1.000])
         assert dict(rows)[0.857] == pytest.approx(9.0)
+
+
+# ---------------------------------------------------------------------------
+# _neck_report_block — the three report states
+# ---------------------------------------------------------------------------
+
+class TestNeckReportBlock:
+    def test_disabled_returns_the_legacy_string(self, tmp_path):
+        """
+        The default output must stay byte-identical to v1.0.0 until the neck
+        disc has been confirmed in ParaView.
+        """
+        assert _neck_report_block(tmp_path, 0.0, enabled=False) == \
+            "disabled_pending_validation"
+
+    def test_disabled_does_not_touch_the_case_dir(self, tmp_path):
+        # No resolved plane, no snapshots — must still short-circuit cleanly.
+        assert isinstance(_neck_report_block(tmp_path, 99.0, enabled=False), str)
+
+    def test_enabled_without_resolved_plane_is_unavailable(self, tmp_path):
+        with pytest.warns(UserWarning, match="neck metrics unavailable"):
+            out = _neck_report_block(tmp_path, 0.0, enabled=True)
+        assert out["status"] == "unavailable"
+        assert "not found" in out["reason"]
+
+    def test_enabled_with_failed_fit_is_unavailable(self, tmp_path):
+        (tmp_path / "neck_plane_resolved.json").write_text(
+            json.dumps({"status": "unavailable", "reason": "closed surface"}))
+        with pytest.warns(UserWarning, match="neck metrics unavailable"):
+            out = _neck_report_block(tmp_path, 0.0, enabled=True)
+        assert out["status"] == "unavailable"
+
+    def test_enabled_with_plane_but_no_snapshots_is_unavailable(self, tmp_path):
+        (tmp_path / "neck_plane_resolved.json").write_text(json.dumps({
+            "origin": [0.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0],
+            "radius_m": 0.002,
+        }))
+        with pytest.warns(UserWarning, match="neck metrics unavailable"):
+            out = _neck_report_block(tmp_path, 0.0, enabled=True)
+        assert out["status"] == "unavailable"
+
+    def _fake_case(self, tmp_path, rows):
+        """A case dir with a resolved plane, with the sampler stubbed out."""
+        (tmp_path / "neck_plane_resolved.json").write_text(json.dumps({
+            "origin": [0.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0],
+            "radius_m": 0.002, "planarity": 0.0, "n_loop_points": 48,
+            "cross_check": {"agrees": True},
+        }))
+        return rows
+
+    def test_enabled_aggregates_over_snapshots(self, tmp_path, monkeypatch):
+        """
+        Sealed-sac signature: inflow and outflow alternate, so the cycle-mean
+        NET flux is ~0 while the mean INFLOW stays positive. That contrast is
+        the whole reason the metric is a positive-part integral.
+        """
+        rows = [
+            {"time": 0.0, "inflow_rate_m3s": 4e-6, "net_flux_m3s": +1e-8,
+             "peak_velocity_ms": 0.2, "peak_inflow_velocity_ms": 0.2,
+             "disc_area_m2": 1e-5, "n_cells": 800},
+            {"time": 0.5, "inflow_rate_m3s": 2e-6, "net_flux_m3s": -1e-8,
+             "peak_velocity_ms": 0.4, "peak_inflow_velocity_ms": 0.1,
+             "disc_area_m2": 1e-5, "n_cells": 800},
+        ]
+        self._fake_case(tmp_path, rows)
+        monkeypatch.setattr("vortex_cfd.postprocess.available_times",
+                            lambda d: [0.0, 0.5])
+        monkeypatch.setattr("vortex_cfd.neck.read_neck_series",
+                            lambda *a, **k: rows)
+
+        out = _neck_report_block(tmp_path, 0.0, enabled=True)
+        assert out["status"] == "experimental_unvalidated"
+        assert out["inflow_rate_m3s"]["mean"] == pytest.approx(3e-6)
+        assert out["inflow_rate_m3s"]["peak"] == pytest.approx(4e-6)
+        assert out["inflow_rate_mls"]["mean"] == pytest.approx(3.0)
+        assert out["net_flux_m3s"]["mean"] == pytest.approx(0.0, abs=1e-12)
+        # Peak speed counts outward cells; peak inflow speed does not.
+        assert out["peak_velocity_ms"] == pytest.approx(0.4)
+        assert out["peak_inflow_velocity_ms"] == pytest.approx(0.2)
+        assert out["n_snapshots"] == 2
+        assert out["validation"]["net_flux_near_zero"] is True
+        assert out["plane"]["cross_check"] == {"agrees": True}
+
+    def test_disc_cutting_the_parent_vessel_fails_validation(self, tmp_path, monkeypatch):
+        """
+        CAVEAT-012 signature: a disc that reaches into the parent vessel passes
+        net throughput, so net flux ~ inflow instead of ~0. This is what makes
+        the metric self-validating without ParaView.
+        """
+        rows = [
+            {"time": 0.0, "inflow_rate_m3s": 2e-6, "net_flux_m3s": 2e-6,
+             "peak_velocity_ms": 0.3, "peak_inflow_velocity_ms": 0.3,
+             "disc_area_m2": 1e-5, "n_cells": 800},
+            {"time": 0.5, "inflow_rate_m3s": 2e-6, "net_flux_m3s": 2e-6,
+             "peak_velocity_ms": 0.3, "peak_inflow_velocity_ms": 0.3,
+             "disc_area_m2": 1e-5, "n_cells": 800},
+        ]
+        self._fake_case(tmp_path, rows)
+        monkeypatch.setattr("vortex_cfd.postprocess.available_times",
+                            lambda d: [0.0, 0.5])
+        monkeypatch.setattr("vortex_cfd.neck.read_neck_series",
+                            lambda *a, **k: rows)
+
+        out = _neck_report_block(tmp_path, 0.0, enabled=True)
+        assert out["validation"]["net_to_inflow_ratio"] == pytest.approx(1.0)
+        assert out["validation"]["net_flux_near_zero"] is False
+
+    def test_underresolved_disc_fails_validation(self, tmp_path, monkeypatch):
+        rows = [{"time": 0.0, "inflow_rate_m3s": 1e-6, "net_flux_m3s": 0.0,
+                 "peak_velocity_ms": 0.1, "peak_inflow_velocity_ms": 0.1,
+                 "disc_area_m2": 1e-8, "n_cells": 3}]
+        self._fake_case(tmp_path, rows)
+        monkeypatch.setattr("vortex_cfd.postprocess.available_times", lambda d: [0.0])
+        monkeypatch.setattr("vortex_cfd.neck.read_neck_series", lambda *a, **k: rows)
+
+        out = _neck_report_block(tmp_path, 0.0, enabled=True)
+        assert out["validation"]["disc_resolved"] is False

@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 from jinja2 import Environment, FileSystemLoader
 
+from . import neck
 from .waveform import T_CYCLE
 from .scaling import _any_in_mm, read_stl
 from .constants import RHO, NU
@@ -69,13 +70,19 @@ def _background_cell_counts(bbox: dict, target: float = 0.002) -> dict:
     }
 
 
-def _location_in_mesh(inlet_stl: Path) -> tuple[float, float, float]:
+def _inlet_geometry(inlet_stl: Path):
     """
-    Interior point guaranteed to be inside the lumen: inlet face centroid
-    displaced one inlet-radius inward along the area-weighted face normal.
+    Geometry of the inlet cap: ``(centroid, inward_normal, radius, interior)``.
 
-    This replaces the bounding-box centre of the wall STL, which fails for
-    curved vessels where the bbox centre falls inside the wall material.
+    ``interior`` is a point guaranteed to be inside the lumen — the cap centroid
+    displaced one inlet-radius inward. It replaces the bounding-box centre of the
+    wall STL, which fails for curved vessels where the bbox centre lands inside
+    the wall material.
+
+    The other three are what the Womersley profile needs: it is built about the
+    cap axis, so it needs the centroid, the flow direction, and the radius.
+    ``radius`` is the area-equivalent sqrt(A/pi); use ``_inlet_area`` when the
+    true triangulated area is wanted (as the parabolic flow table does).
     """
     mesh = read_stl(inlet_stl)
     sized = mesh.compute_cell_sizes()
@@ -91,10 +98,21 @@ def _location_in_mesh(inlet_stl: Path) -> tuple[float, float, float]:
     avg_normal = (areas[:, None] * normals).sum(axis=0)
     avg_normal /= np.linalg.norm(avg_normal)
 
-    # Step one radius inward (negate normal — cap normals point outward)
-    interior = centroid - avg_normal * radius
+    # Cap normals point outward by VMTK convention, so negate to face the flow.
+    inward_normal = -avg_normal
+    interior = centroid + inward_normal * radius
 
-    return (float(interior[0]), float(interior[1]), float(interior[2]))
+    return (
+        centroid.astype(float),
+        inward_normal.astype(float),
+        radius,
+        (float(interior[0]), float(interior[1]), float(interior[2])),
+    )
+
+
+def _location_in_mesh(inlet_stl: Path) -> tuple[float, float, float]:
+    """Interior point inside the lumen — see ``_inlet_geometry``."""
+    return _inlet_geometry(inlet_stl)[3]
 
 
 def _inlet_area(inlet_stl: Path) -> float:
@@ -136,10 +154,15 @@ def build_case(
     postprocess: bool = False,
     legacy: bool = False,
     stl_source_dir: Path | None = None,
-) -> Path:
+    womersley: bool = False,
+) -> tuple[Path, dict]:
     """
     Render all Jinja2 templates and assemble the OpenFOAM case directory.
-    Returns the Path to the created directory.
+
+    Returns ``(case_dir, inlet_params)``.  ``inlet_params`` carries the inlet
+    geometry and flow parameters forward to the runner, which needs them to write
+    the Womersley boundaryData once the mesh exists (the inlet face centres do
+    not exist until after snappyHexMesh).
 
     New mode (default): expects aneurysm_sac + parent_vessel in scaled_stls.
     Legacy mode (legacy=True or wall key present): uses a single wall patch.
@@ -174,9 +197,7 @@ def build_case(
         wall_patches = ["wall"]
         aneurysm_patch = None
         parent_vessel_patch = "wall"
-        has_neck_plane = False
-        neck_origin: list[float] = [0.0, 0.0, 0.0]
-        neck_normal: list[float] = [0.0, 0.0, 1.0]
+        neck_resolved = None  # legacy mode has no aneurysm sac
         patch_labels = {"wall": "wall", "inlet": "inlet"}
     else:
         sac_stl = case_dir / "constant" / "triSurface" / "aneurysm_sac.stl"
@@ -185,6 +206,7 @@ def build_case(
         wall_patches = ["aneurysm_sac", "parent_vessel"]
         aneurysm_patch = "aneurysm_sac"
         parent_vessel_patch = "parent_vessel"
+        json_origin_scale = 1.0
 
         # Load neck_plane.json (or output_neck_plane.json) — skip if absent.
         neck_plane_path = None
@@ -195,21 +217,26 @@ def build_case(
                     neck_plane_path = p
                     break
         if neck_plane_path:
-            data = json.loads(neck_plane_path.read_text())
-            neck_origin = list(data["origin"])
-            neck_normal = list(data["normal"])
-            # Scale origin mm→m if the source STLs are in millimetres.
+            # Only needed to put the file's origin in metres for the cross-check;
+            # the orifice itself is fitted to the sac STL, not read from here.
             src_stls = list(stl_source_dir.glob("*.stl"))
             if src_stls and _any_in_mm(src_stls):
-                neck_origin = [v * 0.001 for v in neck_origin]
-            has_neck_plane = True
-        else:
-            if stl_source_dir:
-                print(f"WARNING: neck_plane.json not found in {stl_source_dir}. "
-                      "Neck-plane function objects will be skipped.")
-            neck_origin = [0.0, 0.0, 0.0]
-            neck_normal = [0.0, 0.0, 1.0]
-            has_neck_plane = False
+                json_origin_scale = 0.001
+        elif stl_source_dir:
+            print(f"WARNING: neck_plane.json not found in {stl_source_dir}. "
+                  "The neck orifice will be fitted to the sac STL without a "
+                  "cross-check.")
+
+        # Fit the neck orifice to the sac STL's open boundary loop.  The copy in
+        # the case dir is already in metres, so no unit heuristic is needed here.
+        # This is a diagnostic: a sac that cannot be fitted must not fail a build.
+        try:
+            neck_resolved = neck.resolve_neck_plane(
+                sac_stl, neck_plane_path, json_origin_scale
+            )
+        except neck.NeckGeometryError as e:
+            print(f"WARNING: neck orifice could not be determined — {e}")
+            neck_resolved = {"status": "unavailable", "reason": str(e)}
 
         patch_labels = {"aneurysm_sac": "aneurysm_sac", "parent_vessel": "parent_vessel",
                         "inlet": "inlet"}
@@ -217,7 +244,9 @@ def build_case(
     patch_labels.update({n: "outlet" for n in outlet_names})
 
     cell_counts = _background_cell_counts(bbox)
-    loc = _location_in_mesh(inlet_stl)
+    inlet_centroid, inlet_normal, inlet_radius, loc = _inlet_geometry(inlet_stl)
+    # The parabolic flow table uses the true triangulated area, not pi*r^2 —
+    # the equivalent radius is only for the Womersley profile's radial shape.
     area = _inlet_area(inlet_stl)
     table = _waveform_table(waveform, mean_velocity, area)
 
@@ -231,9 +260,6 @@ def build_case(
         "wall_patches":        wall_patches,
         "aneurysm_patch":      aneurysm_patch,
         "parent_vessel_patch": parent_vessel_patch,
-        "has_neck_plane":      has_neck_plane,
-        "neck_origin":         neck_origin,
-        "neck_normal":         neck_normal,
         "inlet_patch":         "inlet",
         "outlet_patches":      outlet_names,
         "all_stls":            list(scaled_stls.keys()),
@@ -253,6 +279,7 @@ def build_case(
         "case_name":           case_name,
         "postprocess":         postprocess,
         "field_average_start": field_average_start,
+        "womersley":           womersley,
     }
 
     jinja_env = Environment(
@@ -275,7 +302,24 @@ def build_case(
         json.dumps(patch_labels, indent=2), encoding="utf-8"
     )
 
+    # The fitted neck orifice, so post-processing need not re-read the STLs.
+    if neck_resolved is not None:
+        (case_dir / neck.RESOLVED_FILENAME).write_text(
+            json.dumps(neck_resolved, indent=2), encoding="utf-8"
+        )
+
     # ParaView placeholder
     (case_dir / f"{case_name}.foam").touch()
 
-    return case_dir
+    # Handed to the runner, which writes the Womersley boundaryData after the
+    # mesh exists — inlet face centres do not exist until snappyHexMesh has run.
+    inlet_params = {
+        "centroid":      inlet_centroid,
+        "normal":        inlet_normal,
+        "radius":        inlet_radius,
+        "mean_velocity": mean_velocity,
+        "waveform":      waveform,
+        "nu":            NU,
+        "cycles":        cycles,
+    }
+    return case_dir, inlet_params

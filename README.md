@@ -41,7 +41,7 @@ Given a directory of STLs produced by VORTEX with `--split-patches` (one file pe
    | `wall.stl` | parent vessel | wall |
    | `inlet.stl` | inlet | inlet |
    | `outlet_1.stl`, `outlet_2.stl`, … | outlet | outlet |
-   | `neck_plane.json` (optional) | neck plane for inflow/peak-velocity metrics *(experimental, disabled this release)* | — |
+   | `neck_plane.json` (optional) | cross-check for the fitted neck plane *(experimental, opt-in via `--neck-metrics`)* | — |
 
    If any STL is unrecognised or the counts are wrong (e.g. no inlet), the program prompts for **all** files rather than guessing.
 3. **Scales the geometry from millimetres to metres.** Medical imaging works in mm; OpenFOAM assumes SI metres. Failing to scale gives results that look plausible but are off by 10⁹ in velocity — a class of bug already learned the hard way in a prior iteration of this work.
@@ -95,7 +95,7 @@ These are the deliberate, locked decisions for this pipeline. They are not user-
 
 ### Boundary conditions
 - **Inlet velocity:** `flowRateInletVelocity` for Phase A — applies a uniform parabolic (Poiseuille) profile scaled by the cardiac waveform. Adequate because VORTEX's flow extensions (typically 5× the local radius) let the profile re-develop before reaching the aneurysm.
-- **Inlet velocity (Phase B):** Womersley profile available via opt-in flag — implemented via `codedFixedValue` with Fourier decomposition of the waveform and Bessel functions for the radial profile. Required for academic publication where Womersley is the standard.
+- **Inlet velocity (`--womersley`):** the exact Womersley profile, opt-in. The waveform is Fourier-decomposed and each harmonic gets its complex-Bessel radial shape, so the core-to-wall phase lag of pulsatile flow is represented rather than assumed parabolic. Required for academic publication, where Womersley is the standard. Delivered as pre-computed per-face velocities (`timeVaryingMappedFixedValue`), so no runtime C++ compilation is needed — see below.
 - **Inlet pressure:** zero-gradient.
 - **Outlet velocity:** `inletOutlet` (acts as zero-gradient when flow is outgoing, prevents inflow if recirculation reaches the outlet — a common numerical instability in vascular CFD).
 - **Outlet pressure:** fixed at 0 Pa (gauge — only relative pressure matters for incompressible flow).
@@ -120,7 +120,7 @@ These are the deliberate, locked decisions for this pipeline. They are not user-
 
 **Phase A — MVP (in progress).** End-to-end from STLs to a runnable, openable OpenFOAM case. Skeleton, CLI, interactive labelling, scaling, Jinja2 templates, mesh, solve, no post-processing. *Success criterion:* a real patient STL goes in, a `case_XXX.foam` comes out that opens in ParaView and shows reasonable velocity fields.
 
-**Phase B — Robustness and Womersley.** Womersley inlet profile (publication-grade), retry logic if `snappyHexMesh` fails, structured logging, validation that the inlet area / mean velocity combination is physiologically plausible.
+**Phase B — Robustness.** Retry logic if `snappyHexMesh` fails, structured logging, validation that the inlet area / mean velocity combination is physiologically plausible.
 
 **Phase C — Post-processing and reports.** WSS, OSI, TAWSS as OpenFOAM function objects with `fieldAverage` over the last cycle. JSON report with summary statistics. Optional ParaView screenshots via `pvbatch`.
 
@@ -132,7 +132,9 @@ These are the deliberate, locked decisions for this pipeline. They are not user-
 
 - **Phase A — COMPLETE.** End-to-end STL → runnable OpenFOAM case, validated on a real patient geometry (OpenFOAM v2406, Kubuntu). Velocity field confirmed inside the lumen in ParaView.
 - **Phase C — code-complete, pending real-case validation.** WSS/TAWSS/OSI biomarkers via `--postprocess` / `--postprocess-only`, `metrics_report.json`. ParaView screenshots deferred.
-- **Phase B — planned.** Womersley inlet profile, snappyHexMesh retry logic, structured logging.
+- **Womersley inlet (`--womersley`) — code-complete, pending real-case validation.** Exact analytical profile, opt-in.
+- **Neck inflow metrics (`--neck-metrics`) — code-complete, unvalidated.** Opt-in, see the note under Outputs.
+- **Phase B — planned.** snappyHexMesh retry logic, structured logging.
 
 ---
 
@@ -167,6 +169,25 @@ Then run the pipeline:
 bash run-cfd.sh --stl-dir <path/to/stls> --cycles 3 --mean-velocity 0.4 --cores 4 --out-dir <output-dir>
 ```
 
+### Womersley inlet profile
+
+Add `--womersley` to replace the default parabolic inlet with the exact Womersley analytical profile:
+
+```bash
+bash run-cfd.sh --stl-dir <path/to/stls> --cycles 3 --mean-velocity 0.4 --womersley --postprocess
+```
+
+The waveform is Fourier-decomposed and each harmonic is given its complex-Bessel radial shape, so the
+profile carries the core-to-wall phase lag that a parabolic inlet cannot represent. The velocities are
+computed per inlet face after meshing and written to `constant/boundaryData/inlet/`, which OpenFOAM
+reads through `timeVaryingMappedFixedValue` — no runtime C++ compilation, and the maths stays in Python
+where it is unit-tested.
+
+Data is written for the **entire** run, not one cycle: unlike `flowRateInletVelocity`, this boundary
+condition does not wrap around, and would otherwise hold the last supplied value for every cycle after
+the first. Budget roughly 100 time directories per cardiac cycle (a 3-cycle run over a 1200-face inlet
+is about 7 MB).
+
 ### Hemodynamic biomarkers (WSS / TAWSS / OSI)
 
 Add `--postprocess` to compute the biomarkers automatically at the end of the run. This enables the
@@ -191,10 +212,24 @@ validation flags. In aneurysm (two-patch) mode it also reports the normalised WS
 sac pressure (mean/peak, in Pa). The `wallShearStress` and `wallShearStressMean` fields are also viewable
 on the wall patch in ParaView.
 
-> **Experimental (currently disabled):** neck-plane inflow rate and peak velocity are **not** computed in
-> this release. The underlying function objects are commented out pending validation — the infinite
-> sampling plane integrates the whole parent-vessel cross-section rather than the sac orifice, so the
-> values are not yet trustworthy. The validated outputs are TAWSS, OSI, normalised WSS, and sac pressure.
+> **Experimental — neck inflow metrics (`--neck-metrics`, off by default).** The neck inflow rate, net
+> flux and peak velocity are computed by slicing the volume velocity field at the aneurysm neck orifice.
+> The orifice is fitted to the open boundary loop of `aneurysm_sac.stl` (VORTEX clips the sac at the
+> neck, so that loop *is* the orifice) and written to `neck_plane_resolved.json` in the case directory.
+> These values are **not yet validated against a real case**, so they are opt-in and reported with
+> `"status": "experimental_unvalidated"`. The validated outputs remain TAWSS, OSI, normalised WSS and
+> sac pressure.
+>
+> To check them on a solved case:
+>
+> ```bash
+> ./run-cfd.sh --postprocess-only case_20260804_120000 --neck-metrics
+> ```
+>
+> The report carries a `validation.net_flux_near_zero` flag. A sealed aneurysm sac passes ~zero *net*
+> volume per cycle (inflow and outflow cancel), so if this is false the sampling disc is reaching into
+> the parent vessel and measuring vessel throughput instead. In that case, reduce `radius_m` in
+> `neck_plane_resolved.json` and re-run the post-processing — no re-solve is needed.
 
 ---
 
