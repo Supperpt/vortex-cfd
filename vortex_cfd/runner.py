@@ -12,6 +12,84 @@ from pathlib import Path
 from . import postprocess
 
 
+def _inlet_face_centers(case_dir: Path, patch: str = "inlet"):
+    """
+    Face centres of the meshed inlet patch, read after snappyHexMesh.
+
+    Uses the direct ``boundary`` lookup rather than
+    ``postprocess._wall_block``: that helper's fallback path only recognises
+    blocks carrying ``wallShearStress``, which does not exist before the solve.
+    """
+    import numpy as np
+    import pyvista as pv
+
+    foam_files = sorted(Path(case_dir).glob("*.foam"))
+    if not foam_files:
+        raise FileNotFoundError(f"No .foam file in {case_dir}")
+
+    reader = pv.OpenFOAMReader(str(foam_files[0]))
+    reader.enable_all_patch_arrays()
+    reader.cell_to_point_creation = False
+    mb = reader.read()
+
+    boundary = mb["boundary"] if "boundary" in mb.keys() else mb
+    if not hasattr(boundary, "keys") or patch not in boundary.keys():
+        available = list(boundary.keys()) if hasattr(boundary, "keys") else []
+        raise KeyError(
+            f"patch '{patch}' not found in the mesh after snappyHexMesh "
+            f"(available: {available})"
+        )
+    return np.asarray(boundary[patch].cell_centers().points, dtype=float)
+
+
+def _write_womersley_boundary_data(case_dir: Path, inlet_params: dict | None) -> None:
+    """
+    Build the Womersley inlet profile on the meshed inlet faces and write
+    constant/boundaryData/inlet/.
+
+    Aborts the run on failure: unlike a post-processing diagnostic, a missing
+    boundaryData directory would leave the solver with an inlet BC it cannot
+    read, so failing here is far cheaper than failing hours into the solve.
+    """
+    from . import womersley as wom
+
+    if not inlet_params:
+        print("ERROR: --womersley requires inlet geometry from build_case, "
+              "but none was supplied.", file=sys.stderr)
+        _log_append("\n## Womersley boundaryData — FAILED (no inlet parameters)\n")
+        sys.exit(1)
+
+    print("\n[vortex-cfd] Writing Womersley inlet boundaryData")
+    try:
+        centers = _inlet_face_centers(case_dir)
+        times, vectors = wom.womersley_velocities(
+            face_centers=centers,
+            centroid=inlet_params["centroid"],
+            normal=inlet_params["normal"],
+            radius=inlet_params["radius"],
+            mean_velocity=inlet_params["mean_velocity"],
+            waveform=inlet_params["waveform"],
+            nu=inlet_params["nu"],
+            cycles=inlet_params["cycles"],
+        )
+        wom.write_boundary_data(case_dir, "inlet", times, centers, vectors)
+    except (FileNotFoundError, KeyError, ValueError) as e:
+        print(f"ERROR: could not write Womersley boundaryData: {e}", file=sys.stderr)
+        _log_append(f"\n## Womersley boundaryData — FAILED\n\n{e}\n")
+        sys.exit(1)
+
+    print(f"  {len(times)} time steps x {len(centers)} inlet faces "
+          f"-> constant/boundaryData/inlet/")
+    # A pure-Python step is not logged by _run(), so record it explicitly.
+    _log_append(
+        f"\n## Womersley boundaryData — OK\n\n"
+        f"- Inlet faces: {len(centers)}\n"
+        f"- Time steps: {len(times)} (0 to {times[-1]:.5f} s)\n"
+        f"- Radius: {inlet_params['radius']:.6g} m, "
+        f"mean velocity {inlet_params['mean_velocity']:.4g} m/s\n"
+    )
+
+
 # Path to the current run's markdown log, or None when logging is off.
 # Set by _log_init() at the start of a pipeline; appended to by _run() and
 # _check_mesh_quality() as the run proceeds (written incrementally so the log
@@ -145,6 +223,8 @@ def run_pipeline(
     cycles: int | None = None,
     postprocess_metrics: bool = False,
     neck_metrics: bool = False,
+    womersley: bool = False,
+    inlet_params: dict | None = None,
 ) -> None:
     """
     Full Phase A pipeline:
@@ -170,7 +250,7 @@ def run_pipeline(
     mpi = f"mpirun -np {cores} " if parallel else ""
 
     _log_init(case_dir, f"full pipeline (cores={cores}, cycles={cycles}, "
-                        f"postprocess={postprocess_metrics})")
+                        f"postprocess={postprocess_metrics}, womersley={womersley})")
 
     _run("surfaceFeatureExtract",           case_dir, env, "surfaceFeatureExtract")
     _run("blockMesh",                        case_dir, env, "blockMesh")
@@ -181,6 +261,12 @@ def run_pipeline(
     # is safe and fast enough for typical ICA geometries (~2 min on 6 cores
     # would only save ~30 s). Parallel solving below is unaffected.
     _run("snappyHexMesh -overwrite",        case_dir, env, "snappyHexMesh")
+
+    # Womersley boundaryData must be written here: the inlet face centres only
+    # exist once the mesh does, and the files must be in place before
+    # decomposePar distributes the case below.
+    if womersley:
+        _write_womersley_boundary_data(case_dir, inlet_params)
 
     check_out = _run("checkMesh",            case_dir, env, "checkMesh")
     _check_mesh_quality(check_out)

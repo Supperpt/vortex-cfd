@@ -110,3 +110,44 @@ def test_neck_metrics_without_postprocess_warns(tmp_path):
 
     assert result.exit_code == 0, result.output
     assert "has no effect without --postprocess" in result.output
+
+
+def test_womersley_defaults_off(tmp_path):
+    (tmp_path / "wall.stl").write_text("")
+
+    with mock.patch.object(cli, "check_openfoam", return_value=_FAKE_ENV), \
+         mock.patch.object(cli, "label_patches", return_value={}), \
+         mock.patch.object(cli, "scale_stls", return_value={}), \
+         mock.patch.object(cli, "load_waveform", return_value=None), \
+         mock.patch.object(cli, "build_case",
+                           return_value=(tmp_path / "case", {})) as build, \
+         mock.patch.object(cli, "run_pipeline") as run_pipe:
+        result = CliRunner().invoke(
+            cli.main, ["--stl-dir", str(tmp_path), "--mean-velocity", "0.4"])
+
+    assert result.exit_code == 0, result.output
+    assert build.call_args.kwargs["womersley"] is False
+    assert run_pipe.call_args.kwargs["womersley"] is False
+
+
+def test_womersley_flag_reaches_builder_and_runner(tmp_path):
+    """Both halves matter: the template switch and the boundaryData step."""
+    (tmp_path / "wall.stl").write_text("")
+    params = {"radius": 0.003}
+
+    with mock.patch.object(cli, "check_openfoam", return_value=_FAKE_ENV), \
+         mock.patch.object(cli, "label_patches", return_value={}), \
+         mock.patch.object(cli, "scale_stls", return_value={}), \
+         mock.patch.object(cli, "load_waveform", return_value=None), \
+         mock.patch.object(cli, "build_case",
+                           return_value=(tmp_path / "case", params)) as build, \
+         mock.patch.object(cli, "run_pipeline") as run_pipe:
+        result = CliRunner().invoke(
+            cli.main,
+            ["--stl-dir", str(tmp_path), "--mean-velocity", "0.4", "--womersley"])
+
+    assert result.exit_code == 0, result.output
+    assert build.call_args.kwargs["womersley"] is True
+    assert run_pipe.call_args.kwargs["womersley"] is True
+    # The runner cannot build the profile without the inlet geometry.
+    assert run_pipe.call_args.kwargs["inlet_params"] is params

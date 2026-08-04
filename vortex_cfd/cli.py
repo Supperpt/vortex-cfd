@@ -52,8 +52,14 @@ from .runner import run_pipeline, run_postprocess_only
                    "neck orifice. Off by default pending ParaView confirmation "
                    "that the sampling disc covers the sac orifice and not the "
                    "parent vessel. Adds one extra pass over the snapshots.")
+@click.option("--womersley", is_flag=True, default=False,
+              help="Use the exact Womersley analytical inlet profile instead of "
+                   "the default parabolic one. Recommended for publication-grade "
+                   "WSS. Writes per-face velocity data after meshing (~100 time "
+                   "directories per cardiac cycle).")
 def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
-         postprocess, postprocess_only, legacy_no_aneurysm, neck_metrics):
+         postprocess, postprocess_only, legacy_no_aneurysm, neck_metrics,
+         womersley):
     """
     Automated pulsatile CFD for cerebral aneurysms.
 
@@ -125,6 +131,7 @@ def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
         postprocess=postprocess,
         legacy=legacy_no_aneurysm,
         stl_source_dir=Path(stl_dir),
+        womersley=womersley,
     )
     click.echo(f"Case directory created: {case_dir}")
 
@@ -136,4 +143,6 @@ def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
         cycles=cycles,
         postprocess_metrics=postprocess,
         neck_metrics=neck_metrics,
+        womersley=womersley,
+        inlet_params=inlet_params,
     )
