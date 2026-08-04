@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- Womersley analytical inlet profile (`--womersley`, opt-in): the cardiac waveform is
+  Fourier-decomposed and each harmonic given its complex-Bessel radial shape, delivered
+  as per-face `timeVaryingMappedFixedValue` boundary data written after meshing. No
+  runtime C++ compilation is required. Adds a `scipy>=1.11` dependency.
 - Neck inflow metrics (`--neck-metrics`, opt-in and unvalidated): neck inflow rate,
   net flux and peak velocity, computed by slicing the volume velocity field at the
   aneurysm neck orifice. The orifice is fitted to the open boundary loop of

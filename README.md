@@ -95,7 +95,7 @@ These are the deliberate, locked decisions for this pipeline. They are not user-
 
 ### Boundary conditions
 - **Inlet velocity:** `flowRateInletVelocity` for Phase A — applies a uniform parabolic (Poiseuille) profile scaled by the cardiac waveform. Adequate because VORTEX's flow extensions (typically 5× the local radius) let the profile re-develop before reaching the aneurysm.
-- **Inlet velocity (Phase B):** Womersley profile available via opt-in flag — implemented via `codedFixedValue` with Fourier decomposition of the waveform and Bessel functions for the radial profile. Required for academic publication where Womersley is the standard.
+- **Inlet velocity (`--womersley`):** the exact Womersley profile, opt-in. The waveform is Fourier-decomposed and each harmonic gets its complex-Bessel radial shape, so the core-to-wall phase lag of pulsatile flow is represented rather than assumed parabolic. Required for academic publication, where Womersley is the standard. Delivered as pre-computed per-face velocities (`timeVaryingMappedFixedValue`), so no runtime C++ compilation is needed — see below.
 - **Inlet pressure:** zero-gradient.
 - **Outlet velocity:** `inletOutlet` (acts as zero-gradient when flow is outgoing, prevents inflow if recirculation reaches the outlet — a common numerical instability in vascular CFD).
 - **Outlet pressure:** fixed at 0 Pa (gauge — only relative pressure matters for incompressible flow).
@@ -120,7 +120,7 @@ These are the deliberate, locked decisions for this pipeline. They are not user-
 
 **Phase A — MVP (in progress).** End-to-end from STLs to a runnable, openable OpenFOAM case. Skeleton, CLI, interactive labelling, scaling, Jinja2 templates, mesh, solve, no post-processing. *Success criterion:* a real patient STL goes in, a `case_XXX.foam` comes out that opens in ParaView and shows reasonable velocity fields.
 
-**Phase B — Robustness and Womersley.** Womersley inlet profile (publication-grade), retry logic if `snappyHexMesh` fails, structured logging, validation that the inlet area / mean velocity combination is physiologically plausible.
+**Phase B — Robustness.** Retry logic if `snappyHexMesh` fails, structured logging, validation that the inlet area / mean velocity combination is physiologically plausible.
 
 **Phase C — Post-processing and reports.** WSS, OSI, TAWSS as OpenFOAM function objects with `fieldAverage` over the last cycle. JSON report with summary statistics. Optional ParaView screenshots via `pvbatch`.
 
@@ -132,7 +132,9 @@ These are the deliberate, locked decisions for this pipeline. They are not user-
 
 - **Phase A — COMPLETE.** End-to-end STL → runnable OpenFOAM case, validated on a real patient geometry (OpenFOAM v2406, Kubuntu). Velocity field confirmed inside the lumen in ParaView.
 - **Phase C — code-complete, pending real-case validation.** WSS/TAWSS/OSI biomarkers via `--postprocess` / `--postprocess-only`, `metrics_report.json`. ParaView screenshots deferred.
-- **Phase B — planned.** Womersley inlet profile, snappyHexMesh retry logic, structured logging.
+- **Womersley inlet (`--womersley`) — code-complete, pending real-case validation.** Exact analytical profile, opt-in.
+- **Neck inflow metrics (`--neck-metrics`) — code-complete, unvalidated.** Opt-in, see the note under Outputs.
+- **Phase B — planned.** snappyHexMesh retry logic, structured logging.
 
 ---
 
@@ -166,6 +168,25 @@ Then run the pipeline:
 ```bash
 bash run-cfd.sh --stl-dir <path/to/stls> --cycles 3 --mean-velocity 0.4 --cores 4 --out-dir <output-dir>
 ```
+
+### Womersley inlet profile
+
+Add `--womersley` to replace the default parabolic inlet with the exact Womersley analytical profile:
+
+```bash
+bash run-cfd.sh --stl-dir <path/to/stls> --cycles 3 --mean-velocity 0.4 --womersley --postprocess
+```
+
+The waveform is Fourier-decomposed and each harmonic is given its complex-Bessel radial shape, so the
+profile carries the core-to-wall phase lag that a parabolic inlet cannot represent. The velocities are
+computed per inlet face after meshing and written to `constant/boundaryData/inlet/`, which OpenFOAM
+reads through `timeVaryingMappedFixedValue` — no runtime C++ compilation, and the maths stays in Python
+where it is unit-tested.
+
+Data is written for the **entire** run, not one cycle: unlike `flowRateInletVelocity`, this boundary
+condition does not wrap around, and would otherwise hold the last supplied value for every cycle after
+the first. Budget roughly 100 time directories per cardiac cycle (a 3-cycle run over a 1200-face inlet
+is about 7 MB).
 
 ### Hemodynamic biomarkers (WSS / TAWSS / OSI)
 
