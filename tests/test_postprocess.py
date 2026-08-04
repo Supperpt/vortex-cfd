@@ -209,6 +209,55 @@ class TestReadSurfaceFieldValue:
         assert len(rows) == 1
         assert rows[0][1] == pytest.approx(5.0)
 
+    def test_parenthesised_vector_is_parsed(self, tmp_path):
+        """
+        BUG-010 regression. OpenFOAM writes vector values as "(vx vy vz)"; the
+        old parser split on whitespace and fed "(3.0" to float(), so every row
+        was silently dropped and the metric came out null.
+        """
+        content = """\
+            # Time  (Ux Uy Uz)
+            0.857   (3.0 4.0 0.0)
+            0.900   (0.0 0.0 5.0)
+        """
+        self._make_dat(tmp_path, "neck_vel", content)
+        rows = _read_surface_field_value(tmp_path, "neck_vel", t_start=0.0)
+        assert len(rows) == 2
+        assert rows[0][1] == pytest.approx(5.0)
+        assert rows[1][1] == pytest.approx(5.0)
+
+    def test_component_reduction_preserves_sign(self, tmp_path):
+        """Magnitude would report 2.5 for both rows, hiding the reversal."""
+        content = """\
+            # Time  (Ux Uy Uz)
+            0.857   (-2.5 0.0 0.0)
+            0.900   (2.5 0.0 0.0)
+        """
+        self._make_dat(tmp_path, "flux", content)
+        rows = _read_surface_field_value(tmp_path, "flux", t_start=0.0,
+                                         reduce="component:0")
+        assert rows[0][1] == pytest.approx(-2.5)
+        assert rows[1][1] == pytest.approx(2.5)
+
+    def test_malformed_rows_warn_instead_of_silently_dropping(self, tmp_path):
+        content = """\
+            # Time  value
+            0.857   1.0
+            0.900   not_a_number
+        """
+        self._make_dat(tmp_path, "fo", content)
+        with pytest.warns(UserWarning, match="unparsable row"):
+            rows = _read_surface_field_value(tmp_path, "fo", t_start=0.0)
+        assert len(rows) == 1
+
+    def test_unknown_reduction_raises(self, tmp_path):
+        content = """\
+            0.857   (1.0 2.0 3.0)
+        """
+        self._make_dat(tmp_path, "fo", content)
+        with pytest.raises(ValueError, match="unknown vector reduction"):
+            _read_surface_field_value(tmp_path, "fo", t_start=0.0, reduce="bogus")
+
     def test_comment_lines_skipped(self, tmp_path):
         content = """\
             # header line

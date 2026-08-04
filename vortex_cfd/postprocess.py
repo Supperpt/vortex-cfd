@@ -271,10 +271,23 @@ def _detect_patches(case_dir: Path) -> tuple[str | None, str]:
     return None, "wall"
 
 
+def _reduce_vector(components: list[float], reduce: str) -> float:
+    """Collapse a vector FO value to a scalar according to ``reduce``."""
+    if reduce == "magnitude":
+        return float(np.linalg.norm(components))
+    if reduce.startswith("component:"):
+        idx = int(reduce.split(":", 1)[1])
+        return float(components[idx])
+    raise ValueError(
+        f"unknown vector reduction '{reduce}'; expected 'magnitude' or 'component:N'"
+    )
+
+
 def _read_surface_field_value(
     case_dir: Path,
     fo_name: str,
     t_start: float,
+    reduce: str = "magnitude",
 ) -> list[tuple[float, float]]:
     """
     Parse a surfaceFieldValue postProcessing output file.
@@ -282,9 +295,15 @@ def _read_surface_field_value(
     Reads from postProcessing/<fo_name>/<startTime>/surfaceFieldValue.dat.
     Returns [(time, value), ...] for times >= t_start.
 
-    For scalar fields: value is the scalar.
-    For vector fields (3 components after time column): value is the magnitude.
-    Lines beginning with '#' are skipped as comments.
+    Scalar fields yield the scalar directly.  Vector fields are written by
+    OpenFOAM as a *parenthesised* token ``(vx vy vz)``; ``reduce`` decides how
+    they collapse to a scalar — ``"magnitude"`` (default) or ``"component:N"``.
+    Choose deliberately: magnitude discards the sign, which for a flux quantity
+    silently turns outflow into inflow.
+
+    Lines beginning with '#' are skipped as comments.  Rows that cannot be
+    parsed are counted and warned about rather than dropped silently, since a
+    format mismatch otherwise surfaces only as an unexplained null metric.
     """
     pp_dir = Path(case_dir) / "postProcessing" / fo_name
     if not pp_dir.exists():
@@ -309,26 +328,39 @@ def _read_surface_field_value(
         dat_path = tdir / "surfaceFieldValue.dat"
         if not dat_path.exists():
             continue
+        n_bad = 0
         with dat_path.open() as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
-                parts = line.split()
+                # OpenFOAM brackets vector values as "(vx vy vz)"; strip the
+                # parentheses before parsing, or every vector row is dropped.
+                parts = line.replace("(", " ").replace(")", " ").split()
                 if len(parts) < 2:
+                    n_bad += 1
                     continue
                 try:
                     t = float(parts[0])
-                    if t < t_start - 1e-9:
-                        continue
-                    if len(parts) == 2:
-                        merged[t] = float(parts[1])
-                    elif len(parts) == 4:
-                        # Vector: (time, vx, vy, vz) — report magnitude.
-                        vx, vy, vz = float(parts[1]), float(parts[2]), float(parts[3])
-                        merged[t] = float(np.sqrt(vx**2 + vy**2 + vz**2))
+                    values = [float(v) for v in parts[1:]]
                 except ValueError:
-                    pass
+                    n_bad += 1
+                    continue
+                if t < t_start - 1e-9:
+                    continue
+                if len(values) == 1:
+                    merged[t] = values[0]
+                elif len(values) == 3:
+                    merged[t] = _reduce_vector(values, reduce)
+                else:
+                    n_bad += 1
+        if n_bad:
+            warnings.warn(
+                f"{n_bad} unparsable row(s) in {dat_path} — the function object "
+                "output format may have changed; the affected times are missing "
+                "from the metric.",
+                stacklevel=2,
+            )
 
     return [(t, merged[t]) for t in sorted(merged)]
 
