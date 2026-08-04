@@ -45,7 +45,8 @@ def test_full_run_defaults_cycles_to_three(tmp_path):
          mock.patch.object(cli, "label_patches", return_value={}), \
          mock.patch.object(cli, "scale_stls", return_value={}), \
          mock.patch.object(cli, "load_waveform", return_value=None), \
-         mock.patch.object(cli, "build_case", return_value=tmp_path / "case") as build, \
+         mock.patch.object(cli, "build_case",
+                           return_value=(tmp_path / "case", {})) as build, \
          mock.patch.object(cli, "run_pipeline") as run_pipe:
         result = CliRunner().invoke(
             cli.main,
@@ -84,7 +85,7 @@ def test_neck_metrics_defaults_off_on_full_run(tmp_path):
          mock.patch.object(cli, "label_patches", return_value={}), \
          mock.patch.object(cli, "scale_stls", return_value={}), \
          mock.patch.object(cli, "load_waveform", return_value=None), \
-         mock.patch.object(cli, "build_case", return_value=tmp_path / "case"), \
+         mock.patch.object(cli, "build_case", return_value=(tmp_path / "case", {})), \
          mock.patch.object(cli, "run_pipeline") as run_pipe:
         result = CliRunner().invoke(
             cli.main, ["--stl-dir", str(tmp_path), "--mean-velocity", "0.4"])
@@ -101,7 +102,7 @@ def test_neck_metrics_without_postprocess_warns(tmp_path):
          mock.patch.object(cli, "label_patches", return_value={}), \
          mock.patch.object(cli, "scale_stls", return_value={}), \
          mock.patch.object(cli, "load_waveform", return_value=None), \
-         mock.patch.object(cli, "build_case", return_value=tmp_path / "case"), \
+         mock.patch.object(cli, "build_case", return_value=(tmp_path / "case", {})), \
          mock.patch.object(cli, "run_pipeline"):
         result = CliRunner().invoke(
             cli.main,

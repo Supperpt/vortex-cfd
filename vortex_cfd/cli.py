@@ -114,7 +114,7 @@ def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
         click.echo("Using built-in Ford et al. (2005) ICA waveform.")
 
     # 6. Build OpenFOAM case directory
-    case_dir = build_case(
+    case_dir, inlet_params = build_case(
         scaled_stls=scaled_stls,
         labels=labels,
         cycles=cycles,
