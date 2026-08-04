@@ -544,3 +544,47 @@ class TestBuildCaseInletParams:
         assert params["cycles"] == 4
         assert params["radius"] > 0
         assert np.linalg.norm(params["normal"]) == pytest.approx(1.0)
+
+
+class TestBuildCaseWomersley:
+    """The --womersley inlet must be opt-in; the default is unchanged."""
+
+    def _build(self, scaled, tmp_path, womersley):
+        case_dir, _ = build_case(
+            scaled_stls=scaled, labels={}, cycles=2, mean_velocity=0.4,
+            waveform=load_waveform(None), cores=2, out_dir=str(tmp_path),
+            womersley=womersley,
+        )
+        return (case_dir / "0" / "U").read_text()
+
+    def test_default_inlet_is_parabolic(self, scaled_stls_m, tmp_path):
+        text = self._build(scaled_stls_m, tmp_path, womersley=False)
+        assert "flowRateInletVelocity" in text
+        assert "timeVaryingMappedFixedValue" not in text
+
+    def test_womersley_inlet_replaces_the_flow_rate_table(self, scaled_stls_m, tmp_path):
+        text = self._build(scaled_stls_m, tmp_path, womersley=True)
+        assert "timeVaryingMappedFixedValue" in text
+        assert "flowRateInletVelocity" not in text
+
+    def test_womersley_inlet_sets_required_entries(self, scaled_stls_m, tmp_path):
+        text = self._build(scaled_stls_m, tmp_path, womersley=True)
+        assert "setAverage      false;" in text
+        assert "mapMethod       nearest;" in text
+
+    def test_wall_and_outlet_patches_are_unaffected(self, scaled_stls_m, tmp_path):
+        """Only the inlet block switches; the other patches must still render."""
+        # Separate out_dirs: case names are timestamped to the second, so two
+        # builds in the same second would collide.
+        plain = self._build(scaled_stls_m, tmp_path / "a", womersley=False)
+        wom = self._build(scaled_stls_m, tmp_path / "b", womersley=True)
+        for text in (plain, wom):
+            assert "noSlip" in text
+            assert "inletOutlet" in text
+            assert "background" in text
+
+    def test_aneurysm_mode_keeps_both_wall_patches(self, scaled_stls_aneurysm, tmp_path):
+        text = self._build(scaled_stls_aneurysm, tmp_path, womersley=True)
+        assert "aneurysm_sac" in text
+        assert "parent_vessel" in text
+        assert "timeVaryingMappedFixedValue" in text

@@ -19,8 +19,27 @@ boundaryField
     }
 
 {% endfor %}
+{% if womersley %}
     {{ inlet_patch }}
     {
+        // Exact Womersley analytical profile (--womersley). Per-face velocity
+        // vectors are pre-computed by vortex_cfd/womersley.py and written to
+        // constant/boundaryData/{{ inlet_patch }}/ after snappyHexMesh, because
+        // the inlet face centres do not exist until the mesh does.
+        //
+        // Note this BC has no "outOfBounds repeat" equivalent: past the last
+        // supplied time it holds the final value rather than wrapping around.
+        // boundaryData is therefore written for the whole run, not one cycle.
+        type            timeVaryingMappedFixedValue;
+        setAverage      false;
+        offset          (0 0 0);
+        mapMethod       nearest;
+        value           uniform (0 0 0);
+    }
+{% else %}
+    {{ inlet_patch }}
+    {
+        // Default: parabolic (Poiseuille) profile scaled by the cardiac waveform.
         type            flowRateInletVelocity;
         volumetricFlowRate
         {
@@ -36,6 +55,7 @@ boundaryField
         }
         value           uniform (0 0 0);
     }
+{% endif %}
 
 {% for outlet in outlet_patches %}
     {{ outlet }}
