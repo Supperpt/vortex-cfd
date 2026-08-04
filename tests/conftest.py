@@ -17,6 +17,21 @@ def _sphere_stl(path, radius):
     return path
 
 
+def _open_sac_stl(path, radius=0.004, clip_z=0.002, keep_above=True, normal=(0, 0, 1)):
+    """
+    Sphere clipped by a plane, leaving an OPEN boundary loop — the shape VORTEX
+    produces for an aneurysm sac cut at the neck.  `keep_above` False keeps the
+    other side, which flips the expected inward normal.
+    """
+    mesh = pv.Sphere(radius=radius, theta_resolution=24, phi_resolution=24)
+    origin = np.asarray(normal, dtype=float) * clip_z
+    mesh = mesh.clip(normal=normal, origin=origin, invert=not keep_above)
+    if not isinstance(mesh, pv.PolyData):
+        mesh = mesh.extract_surface(algorithm="dataset_surface")
+    mesh.save(str(path), binary=False)
+    return path
+
+
 def _disc_stl(path, radius, center=(0.0, 0.0, 0.0)):
     """Flat triangulated disc centred at `center` lying in the XY plane."""
     n = 32
@@ -168,3 +183,41 @@ def scaled_stls_aneurysm(stl_paths_aneurysm, labels_aneurysm):
     """Output of scale_stls for the two-patch aneurysm set."""
     from vortex_cfd.scaling import scale_stls
     return scale_stls(stl_paths_aneurysm, labels_aneurysm)
+
+
+# ---------------------------------------------------------------------------
+# Aneurysm fixture with an OPEN sac, so the neck orifice can be extracted.
+# (stl_dir_aneurysm above deliberately keeps a CLOSED sphere — it is the
+# graceful-degradation case for neck-geometry extraction.)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def stl_dir_aneurysm_open_neck(tmp_path):
+    """Same layout as stl_dir_aneurysm but the sac is clipped open at z=0.002."""
+    d = tmp_path / "aneurysm_open_stls"
+    d.mkdir()
+    _open_sac_stl(d / "aneurysm_sac_surface.stl", radius=0.004, clip_z=0.002)
+    _sphere_stl(d / "parent_vessel_surface.stl", radius=0.008)
+    _disc_stl(d / "cap_00.stl", radius=0.003, center=(0.0, 0.0, 0.0))
+    _disc_stl(d / "cap_01.stl", radius=0.0025, center=(0.005, 0.0, 0.0))
+    neck_plane = {"origin": [0.0, 0.0, 0.002], "normal": [0.0, 0.0, 1.0]}
+    (d / "neck_plane.json").write_text(json.dumps(neck_plane))
+    return d
+
+
+@pytest.fixture
+def scaled_stls_aneurysm_open_neck(stl_dir_aneurysm_open_neck):
+    """Output of scale_stls for the open-neck aneurysm set."""
+    from vortex_cfd.scaling import scale_stls
+    paths = sorted(stl_dir_aneurysm_open_neck.glob("*.stl"))
+    labels = {}
+    for p in paths:
+        if "aneurysm_sac" in p.name:
+            labels[p] = "aneurysm_sac"
+        elif "parent_vessel" in p.name:
+            labels[p] = "parent_vessel"
+        elif "00" in p.name:
+            labels[p] = "inlet"
+        else:
+            labels[p] = "outlet"
+    return scale_stls(paths, labels)
