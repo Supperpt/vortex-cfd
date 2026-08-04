@@ -389,17 +389,16 @@ class TestBuildCaseAneurysm:
         assert "surfaceFieldValue_sac_pressure_max" in text
 
     def test_controldict_neck_function_objects_disabled(self, built_case_aneurysm):
-        # Neck-flow metrics are DISABLED for the 0.1.0 release (commented out in
-        # controlDict.j2; see CAVEAT-012 / BUG-010 / BUG-011). Even with
-        # neck_plane.json present, the neck function objects must NOT be rendered
-        # as active dictionary entries.
+        # Neck metrics are computed in Python (vortex_cfd/neck.py), because a
+        # surfaceFieldValue FO cannot express the positive-part integral the
+        # inflow rate needs. Guards against reintroducing the FO approach.
         text = (built_case_aneurysm / "system" / "controlDict").read_text()
         assert "surfaceFieldValue_neck_flux" not in text
         assert "surfaceFieldValue_neck_peak_vel" not in text
 
     def test_controldict_no_neck_objects_when_no_neck_plane(
             self, scaled_stls_aneurysm, tmp_path):
-        """When neck_plane.json is absent, neck function objects must be omitted."""
+        """No neck function objects are emitted regardless of neck_plane.json."""
         wf = load_waveform(None)
         case = build_case(
             scaled_stls=scaled_stls_aneurysm,

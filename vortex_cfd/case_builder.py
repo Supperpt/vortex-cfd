@@ -175,9 +175,6 @@ def build_case(
         wall_patches = ["wall"]
         aneurysm_patch = None
         parent_vessel_patch = "wall"
-        has_neck_plane = False
-        neck_origin: list[float] = [0.0, 0.0, 0.0]
-        neck_normal: list[float] = [0.0, 0.0, 1.0]
         neck_resolved = None  # legacy mode has no aneurysm sac
         patch_labels = {"wall": "wall", "inlet": "inlet"}
     else:
@@ -198,22 +195,15 @@ def build_case(
                     neck_plane_path = p
                     break
         if neck_plane_path:
-            data = json.loads(neck_plane_path.read_text())
-            neck_origin = list(data["origin"])
-            neck_normal = list(data["normal"])
-            # Scale origin mm→m if the source STLs are in millimetres.
+            # Only needed to put the file's origin in metres for the cross-check;
+            # the orifice itself is fitted to the sac STL, not read from here.
             src_stls = list(stl_source_dir.glob("*.stl"))
             if src_stls and _any_in_mm(src_stls):
                 json_origin_scale = 0.001
-                neck_origin = [v * 0.001 for v in neck_origin]
-            has_neck_plane = True
-        else:
-            if stl_source_dir:
-                print(f"WARNING: neck_plane.json not found in {stl_source_dir}. "
-                      "Neck-plane function objects will be skipped.")
-            neck_origin = [0.0, 0.0, 0.0]
-            neck_normal = [0.0, 0.0, 1.0]
-            has_neck_plane = False
+        elif stl_source_dir:
+            print(f"WARNING: neck_plane.json not found in {stl_source_dir}. "
+                  "The neck orifice will be fitted to the sac STL without a "
+                  "cross-check.")
 
         # Fit the neck orifice to the sac STL's open boundary loop.  The copy in
         # the case dir is already in metres, so no unit heuristic is needed here.
@@ -246,9 +236,6 @@ def build_case(
         "wall_patches":        wall_patches,
         "aneurysm_patch":      aneurysm_patch,
         "parent_vessel_patch": parent_vessel_patch,
-        "has_neck_plane":      has_neck_plane,
-        "neck_origin":         neck_origin,
-        "neck_normal":         neck_normal,
         "inlet_patch":         "inlet",
         "outlet_patches":      outlet_names,
         "all_stls":            list(scaled_stls.keys()),
