@@ -44,8 +44,16 @@ from .runner import run_pipeline, run_postprocess_only
               help="Use the legacy single-patch wall.stl mode instead of the default "
                    "two-patch mode (aneurysm_sac + parent_vessel). Required when the "
                    "VORTEX output does not include aneurysm_sac.stl/parent_vessel.stl.")
+# PHASE-C3-VALIDATION-SWITCH: flip default=False -> default=True once the neck
+# disc has been confirmed in ParaView on a real solved case (see LLM.md).
+@click.option("--neck-metrics/--no-neck-metrics", "neck_metrics", default=False,
+              help="EXPERIMENTAL, unvalidated. Compute neck inflow rate, net flux "
+                   "and peak velocity by slicing the volume U field at the fitted "
+                   "neck orifice. Off by default pending ParaView confirmation "
+                   "that the sampling disc covers the sac orifice and not the "
+                   "parent vessel. Adds one extra pass over the snapshots.")
 def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
-         postprocess, postprocess_only, legacy_no_aneurysm):
+         postprocess, postprocess_only, legacy_no_aneurysm, neck_metrics):
     """
     Automated pulsatile CFD for cerebral aneurysms.
 
@@ -61,13 +69,19 @@ def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
         of_env = check_openfoam()
         click.echo(f"OpenFOAM {of_env['version']} detected at {of_env['root'] or '(sourced)'}")
         click.echo(f"Post-processing existing case: {postprocess_only}")
-        run_postprocess_only(Path(postprocess_only), of_env, cycles=cycles)
+        run_postprocess_only(Path(postprocess_only), of_env, cycles=cycles,
+                             neck_metrics=neck_metrics)
         return
 
     # A full run needs a concrete cycle count; 3 is the documented default
     # (first discarded as transient, last analysed).
     if cycles is None:
         cycles = 3
+
+    # Neck metrics are read out of the snapshots during post-processing.
+    if neck_metrics and not postprocess:
+        click.echo("WARNING: --neck-metrics has no effect without --postprocess; "
+                   "no metrics report will be written.", err=True)
 
     # Normal run requires the patient-specific inputs.
     if stl_dir is None or mean_velocity is None:
@@ -121,4 +135,5 @@ def main(stl_dir, cycles, mean_velocity, waveform_csv, cores, out_dir,
         cores=cores,
         cycles=cycles,
         postprocess_metrics=postprocess,
+        neck_metrics=neck_metrics,
     )

@@ -144,6 +144,7 @@ def run_pipeline(
     cores: int | None,
     cycles: int | None = None,
     postprocess_metrics: bool = False,
+    neck_metrics: bool = False,
 ) -> None:
     """
     Full Phase A pipeline:
@@ -194,8 +195,10 @@ def run_pipeline(
         _run("reconstructPar",               case_dir, env, "reconstructPar")
 
     if postprocess_metrics:
-        postprocess.compute_metrics(case_dir, cycles=cycles)
+        postprocess.compute_metrics(case_dir, cycles=cycles, neck_metrics=neck_metrics)
         _log_append("\n## Post-processing — metrics_report.json written\n")
+        if neck_metrics:
+            _log_append("Neck inflow metrics computed (experimental, unvalidated).\n")
 
     _log_append(f"\n## Pipeline complete — {datetime.now().isoformat(timespec='seconds')}\n")
     print(f"\n[vortex-cfd] Pipeline complete.")
@@ -218,7 +221,8 @@ def generate_wss_fields(case_dir: Path, of_env: dict) -> None:
     )
 
 
-def run_postprocess_only(case_dir: Path, of_env: dict, cycles: int | None = None) -> None:
+def run_postprocess_only(case_dir: Path, of_env: dict, cycles: int | None = None,
+                         neck_metrics: bool = False) -> None:
     """
     Standalone Phase C: compute biomarkers on an already-solved case.
     Generates the wallShearStress field first if it is not already present,
@@ -233,7 +237,7 @@ def run_postprocess_only(case_dir: Path, of_env: dict, cycles: int | None = None
         print("[vortex-cfd] wallShearStress not found — generating via -postProcess.")
         generate_wss_fields(case_dir, of_env)
 
-    postprocess.compute_metrics(case_dir, cycles=cycles)
+    postprocess.compute_metrics(case_dir, cycles=cycles, neck_metrics=neck_metrics)
 
     print(f"\n[vortex-cfd] Post-processing complete.")
     print(f"  Case   : {case_dir}")

@@ -55,3 +55,57 @@ def test_full_run_defaults_cycles_to_three(tmp_path):
     assert result.exit_code == 0, result.output
     assert build.call_args.kwargs["cycles"] == 3
     assert run_pipe.call_args.kwargs["cycles"] == 3
+
+
+def test_neck_metrics_defaults_off_on_postprocess_only():
+    """The default output must stay unchanged until the disc is validated."""
+    with mock.patch.object(cli, "check_openfoam", return_value=_FAKE_ENV), \
+         mock.patch.object(cli, "run_postprocess_only") as run_pp:
+        result = CliRunner().invoke(cli.main, ["--postprocess-only", "."])
+
+    assert result.exit_code == 0, result.output
+    assert run_pp.call_args.kwargs["neck_metrics"] is False
+
+
+def test_neck_metrics_flag_forwarded_on_postprocess_only():
+    with mock.patch.object(cli, "check_openfoam", return_value=_FAKE_ENV), \
+         mock.patch.object(cli, "run_postprocess_only") as run_pp:
+        result = CliRunner().invoke(
+            cli.main, ["--postprocess-only", ".", "--neck-metrics"])
+
+    assert result.exit_code == 0, result.output
+    assert run_pp.call_args.kwargs["neck_metrics"] is True
+
+
+def test_neck_metrics_defaults_off_on_full_run(tmp_path):
+    (tmp_path / "wall.stl").write_text("")
+
+    with mock.patch.object(cli, "check_openfoam", return_value=_FAKE_ENV), \
+         mock.patch.object(cli, "label_patches", return_value={}), \
+         mock.patch.object(cli, "scale_stls", return_value={}), \
+         mock.patch.object(cli, "load_waveform", return_value=None), \
+         mock.patch.object(cli, "build_case", return_value=tmp_path / "case"), \
+         mock.patch.object(cli, "run_pipeline") as run_pipe:
+        result = CliRunner().invoke(
+            cli.main, ["--stl-dir", str(tmp_path), "--mean-velocity", "0.4"])
+
+    assert result.exit_code == 0, result.output
+    assert run_pipe.call_args.kwargs["neck_metrics"] is False
+
+
+def test_neck_metrics_without_postprocess_warns(tmp_path):
+    """The metrics are read out during post-processing, so the flag needs it."""
+    (tmp_path / "wall.stl").write_text("")
+
+    with mock.patch.object(cli, "check_openfoam", return_value=_FAKE_ENV), \
+         mock.patch.object(cli, "label_patches", return_value={}), \
+         mock.patch.object(cli, "scale_stls", return_value={}), \
+         mock.patch.object(cli, "load_waveform", return_value=None), \
+         mock.patch.object(cli, "build_case", return_value=tmp_path / "case"), \
+         mock.patch.object(cli, "run_pipeline"):
+        result = CliRunner().invoke(
+            cli.main,
+            ["--stl-dir", str(tmp_path), "--mean-velocity", "0.4", "--neck-metrics"])
+
+    assert result.exit_code == 0, result.output
+    assert "has no effect without --postprocess" in result.output
