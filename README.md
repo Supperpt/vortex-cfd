@@ -41,7 +41,7 @@ Given a directory of STLs produced by VORTEX with `--split-patches` (one file pe
    | `wall.stl` | parent vessel | wall |
    | `inlet.stl` | inlet | inlet |
    | `outlet_1.stl`, `outlet_2.stl`, … | outlet | outlet |
-   | `neck_plane.json` (optional) | neck plane for inflow/peak-velocity metrics *(experimental, disabled this release)* | — |
+   | `neck_plane.json` (optional) | cross-check for the fitted neck plane *(experimental, opt-in via `--neck-metrics`)* | — |
 
    If any STL is unrecognised or the counts are wrong (e.g. no inlet), the program prompts for **all** files rather than guessing.
 3. **Scales the geometry from millimetres to metres.** Medical imaging works in mm; OpenFOAM assumes SI metres. Failing to scale gives results that look plausible but are off by 10⁹ in velocity — a class of bug already learned the hard way in a prior iteration of this work.
@@ -191,10 +191,24 @@ validation flags. In aneurysm (two-patch) mode it also reports the normalised WS
 sac pressure (mean/peak, in Pa). The `wallShearStress` and `wallShearStressMean` fields are also viewable
 on the wall patch in ParaView.
 
-> **Experimental (currently disabled):** neck-plane inflow rate and peak velocity are **not** computed in
-> this release. The underlying function objects are commented out pending validation — the infinite
-> sampling plane integrates the whole parent-vessel cross-section rather than the sac orifice, so the
-> values are not yet trustworthy. The validated outputs are TAWSS, OSI, normalised WSS, and sac pressure.
+> **Experimental — neck inflow metrics (`--neck-metrics`, off by default).** The neck inflow rate, net
+> flux and peak velocity are computed by slicing the volume velocity field at the aneurysm neck orifice.
+> The orifice is fitted to the open boundary loop of `aneurysm_sac.stl` (VORTEX clips the sac at the
+> neck, so that loop *is* the orifice) and written to `neck_plane_resolved.json` in the case directory.
+> These values are **not yet validated against a real case**, so they are opt-in and reported with
+> `"status": "experimental_unvalidated"`. The validated outputs remain TAWSS, OSI, normalised WSS and
+> sac pressure.
+>
+> To check them on a solved case:
+>
+> ```bash
+> ./run-cfd.sh --postprocess-only case_20260804_120000 --neck-metrics
+> ```
+>
+> The report carries a `validation.net_flux_near_zero` flag. A sealed aneurysm sac passes ~zero *net*
+> volume per cycle (inflow and outflow cancel), so if this is false the sampling disc is reaching into
+> the parent vessel and measuring vessel throughput instead. In that case, reduce `radius_m` in
+> `neck_plane_resolved.json` and re-run the post-processing — no re-solve is needed.
 
 ---
 

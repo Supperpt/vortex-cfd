@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Neck inflow metrics (`--neck-metrics`, opt-in and unvalidated): neck inflow rate,
+  net flux and peak velocity, computed by slicing the volume velocity field at the
+  aneurysm neck orifice. The orifice is fitted to the open boundary loop of
+  `aneurysm_sac.stl` and recorded in `neck_plane_resolved.json`.
+
+### Changed
+- The neck `surfaceFieldValue` function objects have been removed rather than
+  re-enabled. The clinical neck inflow rate is the integral of the *inward* part of
+  the velocity only, which no function-object operation can express;
+  `areaNormalIntegrate` measures net flux, which averages to ~0 through a sealed sac.
+- `surfaceFieldValue` parsing now strips OpenFOAM's parentheses from vector values,
+  warns about unparsable rows instead of dropping them silently, and takes an explicit
+  vector-reduction argument so a signed quantity cannot lose its sign by default.
+
+### Fixed
+- BUG-010: `neck_peak_velocity_ms` was always null — the parser could not read
+  parenthesised vector tokens, and the failure was swallowed silently.
+- BUG-011: `neck_peak_flow_rate_m3s` used a sign-naive `max()` on signed flux, which
+  returned the *smallest*-magnitude value whenever flux was negative all cycle.
+- CAVEAT-012: the neck sampling plane was infinite and integrated the whole
+  parent-vessel cross-section instead of the sac orifice.
+
 ## [1.0.0] — 2026-06-17
 
 First public release, accompanying the ARTERY26 proof-of-concept study.
