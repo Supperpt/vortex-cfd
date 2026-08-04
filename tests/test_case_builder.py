@@ -416,6 +416,17 @@ class TestBuildCaseAneurysm:
         assert "surfaceFieldValue_neck_flux" not in text
         assert "surfaceFieldValue_neck_peak_vel" not in text
 
+    def test_closed_sac_degrades_gracefully(self, built_case_aneurysm):
+        """
+        The stl_dir_aneurysm fixture builds the sac as a CLOSED sphere, so the
+        neck orifice cannot be fitted.  That must never fail a build — the
+        resolved file records why instead.
+        """
+        resolved = json.loads(
+            (built_case_aneurysm / "neck_plane_resolved.json").read_text())
+        assert resolved["status"] == "unavailable"
+        assert "closed surface" in resolved["reason"]
+
     def test_bbox_covers_both_wall_stls(self, built_case_aneurysm):
         ts = built_case_aneurysm / "constant" / "triSurface"
         sac = pv.read(str(ts / "aneurysm_sac.stl"))
@@ -423,3 +434,52 @@ class TestBuildCaseAneurysm:
         # parent_vessel is larger; combined bbox should be at least as large.
         text = (built_case_aneurysm / "system" / "blockMeshDict").read_text()
         assert "vertices" in text  # proxy: blockMeshDict was rendered
+
+
+# ---------------------------------------------------------------------------
+# build_case — aneurysm mode with an OPEN sac, so the neck orifice resolves
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def built_case_open_neck(scaled_stls_aneurysm_open_neck, stl_dir_aneurysm_open_neck,
+                         tmp_path):
+    wf = load_waveform(None)
+    return build_case(
+        scaled_stls=scaled_stls_aneurysm_open_neck,
+        labels={},
+        cycles=3,
+        mean_velocity=0.4,
+        waveform=wf,
+        cores=2,
+        out_dir=str(tmp_path),
+        postprocess=True,
+        stl_source_dir=stl_dir_aneurysm_open_neck,
+    )
+
+
+class TestBuildCaseOpenNeck:
+    def test_resolved_neck_plane_written(self, built_case_open_neck):
+        resolved = json.loads(
+            (built_case_open_neck / "neck_plane_resolved.json").read_text())
+        assert "status" not in resolved          # i.e. it succeeded
+        assert resolved["radius_m"] > 0
+        assert resolved["n_loop_points"] > 10
+
+    def test_resolved_normal_is_unit(self, built_case_open_neck):
+        resolved = json.loads(
+            (built_case_open_neck / "neck_plane_resolved.json").read_text())
+        assert np.linalg.norm(resolved["normal"]) == pytest.approx(1.0)
+
+    def test_resolved_plane_sits_at_the_clip_height(self, built_case_open_neck):
+        resolved = json.loads(
+            (built_case_open_neck / "neck_plane_resolved.json").read_text())
+        # Fixture clips the sac at z = 0.002 m.
+        assert resolved["origin"] == pytest.approx([0.0, 0.0, 0.002], abs=1e-5)
+
+    def test_cross_check_against_neck_plane_json_agrees(self, built_case_open_neck):
+        resolved = json.loads(
+            (built_case_open_neck / "neck_plane_resolved.json").read_text())
+        assert resolved["cross_check"]["agrees"] is True
+
+    def test_legacy_mode_writes_no_resolved_plane(self, built_case):
+        assert not (built_case / "neck_plane_resolved.json").exists()

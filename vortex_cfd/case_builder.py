@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 from jinja2 import Environment, FileSystemLoader
 
+from . import neck
 from .waveform import T_CYCLE
 from .scaling import _any_in_mm, read_stl
 from .constants import RHO, NU
@@ -177,6 +178,7 @@ def build_case(
         has_neck_plane = False
         neck_origin: list[float] = [0.0, 0.0, 0.0]
         neck_normal: list[float] = [0.0, 0.0, 1.0]
+        neck_resolved = None  # legacy mode has no aneurysm sac
         patch_labels = {"wall": "wall", "inlet": "inlet"}
     else:
         sac_stl = case_dir / "constant" / "triSurface" / "aneurysm_sac.stl"
@@ -185,6 +187,7 @@ def build_case(
         wall_patches = ["aneurysm_sac", "parent_vessel"]
         aneurysm_patch = "aneurysm_sac"
         parent_vessel_patch = "parent_vessel"
+        json_origin_scale = 1.0
 
         # Load neck_plane.json (or output_neck_plane.json) — skip if absent.
         neck_plane_path = None
@@ -201,6 +204,7 @@ def build_case(
             # Scale origin mm→m if the source STLs are in millimetres.
             src_stls = list(stl_source_dir.glob("*.stl"))
             if src_stls and _any_in_mm(src_stls):
+                json_origin_scale = 0.001
                 neck_origin = [v * 0.001 for v in neck_origin]
             has_neck_plane = True
         else:
@@ -210,6 +214,17 @@ def build_case(
             neck_origin = [0.0, 0.0, 0.0]
             neck_normal = [0.0, 0.0, 1.0]
             has_neck_plane = False
+
+        # Fit the neck orifice to the sac STL's open boundary loop.  The copy in
+        # the case dir is already in metres, so no unit heuristic is needed here.
+        # This is a diagnostic: a sac that cannot be fitted must not fail a build.
+        try:
+            neck_resolved = neck.resolve_neck_plane(
+                sac_stl, neck_plane_path, json_origin_scale
+            )
+        except neck.NeckGeometryError as e:
+            print(f"WARNING: neck orifice could not be determined — {e}")
+            neck_resolved = {"status": "unavailable", "reason": str(e)}
 
         patch_labels = {"aneurysm_sac": "aneurysm_sac", "parent_vessel": "parent_vessel",
                         "inlet": "inlet"}
@@ -274,6 +289,12 @@ def build_case(
     (case_dir / "patch_labels.json").write_text(
         json.dumps(patch_labels, indent=2), encoding="utf-8"
     )
+
+    # The fitted neck orifice, so post-processing need not re-read the STLs.
+    if neck_resolved is not None:
+        (case_dir / neck.RESOLVED_FILENAME).write_text(
+            json.dumps(neck_resolved, indent=2), encoding="utf-8"
+        )
 
     # ParaView placeholder
     (case_dir / f"{case_name}.foam").touch()
